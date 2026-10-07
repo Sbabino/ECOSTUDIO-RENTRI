@@ -52,10 +52,10 @@ const s = {
     padding: 20,
     border: "1px solid #0f766e",
     boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-  },  statLabel: { fontSize: 13, color: "#64748b", margin: 0 },
+  },  
+  statLabel: { fontSize: 13, color: "#64748b", margin: 0 },
   statValue: { fontSize: 30, fontWeight: 700, margin: "6px 0 0" },
   card: {
-      card: {
     background: "#fff",
     borderRadius: 12,
     padding: 24,
