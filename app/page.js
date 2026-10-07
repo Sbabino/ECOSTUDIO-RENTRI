@@ -10,21 +10,146 @@ const emptyForm = {
   frequenza_giorni: 30,
 };
 
+// Calcola la prossima scadenza: data primo carico + multipli della frequenza
+function prossimaScadenza(dataPrimo, freq) {
+  const [y, m, d] = dataPrimo.split("-").map(Number);
+  const oggi = new Date();
+  oggi.setHours(0, 0, 0, 0);
+  let scadenza = new Date(y, m - 1, d);
+  while (scadenza < oggi) {
+    scadenza.setDate(scadenza.getDate() + freq);
+  }
+  const giorni = Math.round((scadenza - oggi) / 86400000);
+  return { data: scadenza, giorni };
+}
+
+function formatData(date) {
+  return date.toLocaleDateString("it-IT");
+}
+
+function coloreGiorni(giorni) {
+  if (giorni <= 7) return "#dc2626";
+  if (giorni <= 15) return "#d97706";
+  return "#0f766e";
+}
+
+const s = {
+  page: {
+    minHeight: "100vh",
+    background: "#f1f5f9",
+    fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+    color: "#0f172a",
+    padding: "32px 16px",
+  },
+  container: { maxWidth: 1100, margin: "0 auto" },
+  header: { marginBottom: 24 },
+  title: { fontSize: 26, fontWeight: 700, margin: 0 },
+  subtitle: { fontSize: 14, color: "#64748b", margin: "4px 0 0" },
+  stats: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+    gap: 16,
+    marginBottom: 24,
+  },
+  statCard: {
+    background: "#fff",
+    borderRadius: 12,
+    padding: 20,
+    boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+  },
+  statLabel: { fontSize: 13, color: "#64748b", margin: 0 },
+  statValue: { fontSize: 30, fontWeight: 700, margin: "6px 0 0" },
+  card: {
+    background: "#fff",
+    borderRadius: 12,
+    padding: 24,
+    boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+    marginBottom: 24,
+  },
+  cardTitle: { fontSize: 16, fontWeight: 600, margin: "0 0 16px" },
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gap: 14,
+  },
+  label: { fontSize: 13, fontWeight: 600, color: "#334155", marginBottom: 6, display: "block" },
+  input: {
+    width: "100%",
+    padding: "10px 12px",
+    borderRadius: 8,
+    border: "1px solid #cbd5e1",
+    fontSize: 14,
+    boxSizing: "border-box",
+  },
+  button: {
+    marginTop: 16,
+    padding: "10px 20px",
+    borderRadius: 8,
+    border: "none",
+    background: "#0f766e",
+    color: "#fff",
+    fontWeight: 600,
+    fontSize: 14,
+    cursor: "pointer",
+  },
+  error: {
+    background: "#fef2f2",
+    color: "#b91c1c",
+    padding: "10px 14px",
+    borderRadius: 8,
+    marginBottom: 16,
+    fontSize: 14,
+  },
+  table: { width: "100%", borderCollapse: "collapse", fontSize: 14 },
+  th: {
+    textAlign: "left",
+    padding: "10px 12px",
+    borderBottom: "2px solid #e2e8f0",
+    color: "#64748b",
+    fontWeight: 600,
+    fontSize: 13,
+  },
+  td: { padding: "12px", borderBottom: "1px solid #f1f5f9" },
+  badge: (colore) => ({
+    display: "inline-block",
+    padding: "4px 10px",
+    borderRadius: 999,
+    background: colore + "1a",
+    color: colore,
+    fontWeight: 600,
+    fontSize: 13,
+  }),
+  btnDisabled: {
+    padding: "6px 12px",
+    borderRadius: 6,
+    border: "1px solid #cbd5e1",
+    background: "#f8fafc",
+    color: "#94a3b8",
+    fontSize: 13,
+  },
+  empty: { textAlign: "center", color: "#94a3b8", padding: 24 },
+};
+
 export default function Home() {
   const [clients, setClients] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   async function loadClients() {
     const res = await fetch("/api/clients");
     const data = await res.json();
     if (data.error) setError(data.error);
     else setClients(data);
+    setLoading(false);
   }
 
   useEffect(() => {
-    loadClients().catch(() => setError("Errore di connessione"));
+    loadClients().catch(() => {
+      setError("Errore di connessione");
+      setLoading(false);
+    });
   }, []);
 
   function handleChange(e) {
@@ -42,61 +167,112 @@ export default function Home() {
       body: JSON.stringify(form),
     });
     const data = await res.json();
-
     setSaving(false);
 
     if (!res.ok) {
       setError(data.error);
       return;
     }
-
     setForm(emptyForm);
     loadClients();
   }
 
+  // Righe con scadenza calcolata, ordinate per urgenza
+  const righe = clients
+    .map((c) => ({ ...c, ...prossimaScadenza(c.data_primo_carico, c.frequenza_giorni) }))
+    .sort((a, b) => a.giorni - b.giorni);
+
+  const urgenti = righe.filter((r) => r.giorni <= 7).length;
+
   return (
-    <main style={{ padding: 40, fontFamily: "sans-serif" }}>
-      <h1>Portale RENTRI</h1>
+    <div style={s.page}>
+      <div style={s.container}>
+        <header style={s.header}>
+          <h1 style={s.title}>Portale RENTRI</h1>
+          <p style={s.subtitle}>Gestione clienti, scadenze e notifiche</p>
+        </header>
 
-      <h2>Nuovo cliente</h2>
-      <form onSubmit={handleSubmit} style={{ display: "grid", gap: 10, maxWidth: 400 }}>
-        <input name="ragione_sociale" placeholder="Ragione sociale *" value={form.ragione_sociale} onChange={handleChange} required />
-        <input name="email" type="email" placeholder="Email *" value={form.email} onChange={handleChange} required />
-        <input name="telefono" placeholder="Telefono" value={form.telefono} onChange={handleChange} />
-        <input name="data_primo_carico" type="date" value={form.data_primo_carico} onChange={handleChange} required />
-        <select name="frequenza_giorni" value={form.frequenza_giorni} onChange={handleChange}>
-          <option value={15}>Ogni 15 giorni</option>
-          <option value={30}>Ogni 30 giorni</option>
-          <option value={60}>Ogni 60 giorni</option>
-        </select>
-        <button type="submit" disabled={saving}>
-          {saving ? "Salvataggio..." : "Salva cliente"}
-        </button>
-      </form>
+        <div style={s.stats}>
+          <div style={s.statCard}>
+            <p style={s.statLabel}>Clienti totali</p>
+            <p style={s.statValue}>{clients.length}</p>
+          </div>
+          <div style={s.statCard}>
+            <p style={s.statLabel}>Urgenti (≤ 7 giorni)</p>
+            <p style={{ ...s.statValue, color: urgenti > 0 ? "#dc2626" : "#0f172a" }}>{urgenti}</p>
+          </div>
+        </div>
 
-      {error && <p style={{ color: "red" }}>Errore: {error}</p>}
+        {error && <div style={s.error}>{error}</div>}
 
-      <h2>Clienti</h2>
-      <table border="1" cellPadding="8" style={{ borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th>Ragione sociale</th>
-            <th>Email</th>
-            <th>Primo carico</th>
-            <th>Frequenza (gg)</th>
-          </tr>
-        </thead>
-        <tbody>
-          {clients.map((c) => (
-            <tr key={c.id}>
-              <td>{c.ragione_sociale}</td>
-              <td>{c.email}</td>
-              <td>{c.data_primo_carico}</td>
-              <td>{c.frequenza_giorni}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </main>
+        <section style={s.card}>
+          <h2 style={s.cardTitle}>Nuovo cliente</h2>
+          <form onSubmit={handleSubmit}>
+            <div style={s.grid}>
+              <div>
+                <label style={s.label}>Denominazione sociale *</label>
+                <input style={s.input} name="ragione_sociale" value={form.ragione_sociale} onChange={handleChange} required />
+              </div>
+              <div>
+                <label style={s.label}>Email *</label>
+                <input style={s.input} name="email" type="email" value={form.email} onChange={handleChange} required />
+              </div>
+              <div>
+                <label style={s.label}>Telefono</label>
+                <input style={s.input} name="telefono" value={form.telefono} onChange={handleChange} />
+              </div>
+              <div>
+                <label style={s.label}>Data primo carico rifiuti *</label>
+                <input style={s.input} name="data_primo_carico" type="date" value={form.data_primo_carico} onChange={handleChange} required />
+              </div>
+              <div>
+                <label style={s.label}>Frequenza notifiche</label>
+                <select style={s.input} name="frequenza_giorni" value={form.frequenza_giorni} onChange={handleChange}>
+                  <option value={15}>Ogni 15 giorni</option>
+                  <option value={30}>Ogni 30 giorni</option>
+                  <option value={60}>Ogni 60 giorni</option>
+                </select>
+              </div>
+            </div>
+            <button type="submit" disabled={saving} style={{ ...s.button, opacity: saving ? 0.6 : 1 }}>
+              {saving ? "Salvataggio..." : "Aggiungi cliente"}
+            </button>
+          </form>
+        </section>
+
+        <section style={s.card}>
+          <h2 style={s.cardTitle}>Clienti e scadenze</h2>
+          <table style={s.table}>
+            <thead>
+              <tr>
+                <th style={s.th}>Cliente</th>
+                <th style={s.th}>Email</th>
+                <th style={s.th}>Prossima scadenza</th>
+                <th style={s.th}>Giorni</th>
+                <th style={s.th}>Azioni</th>
+              </tr>
+            </thead>
+            <tbody>
+              {righe.map((r) => (
+                <tr key={r.id}>
+                  <td style={{ ...s.td, fontWeight: 600 }}>{r.ragione_sociale}</td>
+                  <td style={s.td}>{r.email}</td>
+                  <td style={s.td}>{formatData(r.data)}</td>
+                  <td style={s.td}>
+                    <span style={s.badge(coloreGiorni(r.giorni))}>
+                      {r.giorni < 0 ? `scaduta da ${-r.giorni} gg` : `${r.giorni} gg`}
+                    </span>
+                  </td>
+                  <td style={s.td}>
+                    <button style={s.btnDisabled} disabled>Invia mail</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!loading && clients.length === 0 && <div style={s.empty}>Nessun cliente inserito.</div>}
+        </section>
+      </div>
+    </div>
   );
 }
