@@ -37,9 +37,15 @@ const s = {
     padding: "32px 16px",
   },
   container: { maxWidth: 1100, margin: "0 auto" },
-  header: { marginBottom: 24 },
-  title: { fontSize: 26, fontWeight: 700, margin: 0 },
-  subtitle: { fontSize: 14, color: "#64748b", margin: "4px 0 0" },
+    header: {
+    background: "#115e59",
+    color: "#ffffff",
+    borderRadius: 12,
+    padding: "20px 24px",
+    marginBottom: 24,
+  },
+  title: { fontSize: 26, fontWeight: 700, margin: 0, color: "#ffffff" },
+  subtitle: { fontSize: 14, color: "#ccfbf1", margin: "4px 0 0" },
   stats: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
