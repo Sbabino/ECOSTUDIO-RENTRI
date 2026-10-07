@@ -10,7 +10,6 @@ const emptyForm = {
   frequenza_giorni: 30,
 };
 
-// Calcola la prossima scadenza: data primo carico + multipli della frequenza
 function prossimaScadenza(dataPrimo, freq) {
   const [y, m, d] = dataPrimo.split("-").map(Number);
   const oggi = new Date();
@@ -21,10 +20,6 @@ function prossimaScadenza(dataPrimo, freq) {
   }
   const giorni = Math.round((scadenza - oggi) / 86400000);
   return { data: scadenza, giorni };
-}
-
-function formatData(date) {
-  return date.toLocaleDateString("it-IT");
 }
 
 function coloreGiorni(giorni) {
@@ -109,7 +104,7 @@ const s = {
     fontWeight: 600,
     fontSize: 13,
   },
-  td: { padding: "12px", borderBottom: "1px solid #f1f5f9" },
+  td: { padding: "12px", borderBottom: "1px solid #f1f5f9", verticalAlign: "middle" },
   badge: (colore) => ({
     display: "inline-block",
     padding: "4px 10px",
@@ -127,6 +122,7 @@ const s = {
     color: "#94a3b8",
     fontSize: 13,
   },
+  link: { color: "#0f766e", fontWeight: 600, fontSize: 13, marginRight: 10 },
   empty: { textAlign: "center", color: "#94a3b8", padding: 24 },
 };
 
@@ -136,6 +132,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [uploadingId, setUploadingId] = useState(null);
 
   async function loadClients() {
     const res = await fetch("/api/clients");
@@ -177,7 +174,28 @@ export default function Home() {
     loadClients();
   }
 
-  // Righe con scadenza calcolata, ordinate per urgenza
+  async function handleUpload(clientId, file) {
+    if (!file) return;
+    setError("");
+    setUploadingId(clientId);
+
+    const fd = new FormData();
+    fd.append("file", file);
+
+    const res = await fetch(`/api/clients/${clientId}/file`, {
+      method: "POST",
+      body: fd,
+    });
+    const data = await res.json();
+    setUploadingId(null);
+
+    if (!res.ok) {
+      setError(data.error);
+      return;
+    }
+    loadClients();
+  }
+
   const righe = clients
     .map((c) => ({ ...c, ...prossimaScadenza(c.data_primo_carico, c.frequenza_giorni) }))
     .sort((a, b) => a.giorni - b.giorni);
@@ -249,6 +267,7 @@ export default function Home() {
                 <th style={s.th}>Email</th>
                 <th style={s.th}>Prossima scadenza</th>
                 <th style={s.th}>Giorni</th>
+                <th style={s.th}>Documento</th>
                 <th style={s.th}>Azioni</th>
               </tr>
             </thead>
@@ -257,11 +276,29 @@ export default function Home() {
                 <tr key={r.id}>
                   <td style={{ ...s.td, fontWeight: 600 }}>{r.ragione_sociale}</td>
                   <td style={s.td}>{r.email}</td>
-                  <td style={s.td}>{formatData(r.data)}</td>
+                  <td style={s.td}>{r.data.toLocaleDateString("it-IT")}</td>
                   <td style={s.td}>
                     <span style={s.badge(coloreGiorni(r.giorni))}>
                       {r.giorni < 0 ? `scaduta da ${-r.giorni} gg` : `${r.giorni} gg`}
                     </span>
+                  </td>
+                  <td style={s.td}>
+                    {r.file_word_path ? (
+                      <a style={s.link} href={`/api/clients/${r.id}/file`} target="_blank" rel="noreferrer">
+                        Scarica
+                      </a>
+                    ) : (
+                      <span style={{ color: "#94a3b8", fontSize: 13 }}>nessun file</span>
+                    )}
+                    <br />
+                    <input
+                      type="file"
+                      accept=".pdf,.doc,.docx"
+                      disabled={uploadingId === r.id}
+                      onChange={(e) => handleUpload(r.id, e.target.files[0])}
+                      style={{ fontSize: 12, marginTop: 4 }}
+                    />
+                    {uploadingId === r.id && <span style={{ fontSize: 12, color: "#64748b" }}> caricamento...</span>}
                   </td>
                   <td style={s.td}>
                     <button style={s.btnDisabled} disabled>Invia mail</button>
