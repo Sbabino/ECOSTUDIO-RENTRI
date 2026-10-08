@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { prossimaScadenza } from "../lib/scadenze";
 
 const emptyForm = {
   ragione_sociale: "",
@@ -9,18 +11,6 @@ const emptyForm = {
   data_primo_carico: "",
   frequenza_giorni: 30,
 };
-
-function prossimaScadenza(dataPrimo, freq) {
-  const [y, m, d] = dataPrimo.split("-").map(Number);
-  const oggi = new Date();
-  oggi.setHours(0, 0, 0, 0);
-  let scadenza = new Date(y, m - 1, d);
-  while (scadenza < oggi) {
-    scadenza.setDate(scadenza.getDate() + freq);
-  }
-  const giorni = Math.round((scadenza - oggi) / 86400000);
-  return { data: scadenza, giorni };
-}
 
 function ultimoInvioDi(client) {
   const inviate = (client.notifications || [])
@@ -34,6 +24,8 @@ function coloreGiorni(giorni) {
   if (giorni <= 15) return "#d97706";
   return "#0f766e";
 }
+
+const fmtData = (ms) => new Date(ms).toLocaleDateString("it-IT", { timeZone: "UTC" });
 
 const s = {
   page: {
@@ -91,6 +83,16 @@ const s = {
     fontSize: 14,
     boxSizing: "border-box",
   },
+  search: {
+    width: "100%",
+    maxWidth: 360,
+    padding: "10px 12px",
+    borderRadius: 8,
+    border: "1px solid #cbd5e1",
+    fontSize: 14,
+    boxSizing: "border-box",
+    marginBottom: 16,
+  },
   button: {
     marginTop: 16,
     padding: "10px 20px",
@@ -120,6 +122,7 @@ const s = {
     fontSize: 13,
   },
   td: { padding: "12px", borderBottom: "1px solid #f1f5f9", verticalAlign: "middle" },
+  nameLink: { color: "#0f766e", fontWeight: 600, textDecoration: "none" },
   badge: (colore) => ({
     display: "inline-block",
     padding: "4px 10px",
@@ -143,6 +146,7 @@ const s = {
   muted: { color: "#94a3b8", fontSize: 13 },
   small: { fontSize: 12, color: "#64748b" },
   empty: { textAlign: "center", color: "#94a3b8", padding: 24 },
+  check: { width: 18, height: 18, cursor: "pointer" },
 };
 
 export default function Home() {
@@ -153,6 +157,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [uploadingId, setUploadingId] = useState(null);
   const [sendingId, setSendingId] = useState(null);
+  const [search, setSearch] = useState("");
 
   async function loadClients() {
     const res = await fetch("/api/clients");
@@ -231,6 +236,23 @@ export default function Home() {
     loadClients();
   }
 
+  async function handleRentri(client, checked) {
+    setError("");
+    const res = await fetch(`/api/clients/${client.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rentri_caricato: checked }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      setError(data.error);
+      return;
+    }
+    loadClients();
+  }
+
+  // Ordine: scadenza più vicina in alto (le scadute, con giorni negativi, stanno prima)
   const righe = clients
     .map((c) => ({
       ...c,
@@ -238,6 +260,16 @@ export default function Home() {
       ultimoInvio: ultimoInvioDi(c),
     }))
     .sort((a, b) => a.giorni - b.giorni);
+
+  // Ricerca per ragione sociale o email, senza distinzione di maiuscole
+  const q = search.trim().toLowerCase();
+  const righeFiltrate = q
+    ? righe.filter(
+        (r) =>
+          r.ragione_sociale.toLowerCase().includes(q) ||
+          r.email.toLowerCase().includes(q)
+      )
+    : righe;
 
   const urgenti = righe.filter((r) => r.giorni <= 7).length;
 
@@ -283,12 +315,8 @@ export default function Home() {
                 <input style={s.input} name="data_primo_carico" type="date" value={form.data_primo_carico} onChange={handleChange} required />
               </div>
               <div>
-                <label style={s.label}>Frequenza notifiche</label>
-                <select style={s.input} name="frequenza_giorni" value={form.frequenza_giorni} onChange={handleChange}>
-                  <option value={15}>Ogni 15 giorni</option>
-                  <option value={30}>Ogni 30 giorni</option>
-                  <option value={60}>Ogni 60 giorni</option>
-                </select>
+                <label style={s.label}>Ogni quanti giorni</label>
+                <input style={s.input} name="frequenza_giorni" type="number" min={1} max={365} value={form.frequenza_giorni} onChange={handleChange} required />
               </div>
             </div>
             <button type="submit" disabled={saving} style={{ ...s.button, opacity: saving ? 0.6 : 1 }}>
@@ -299,6 +327,15 @@ export default function Home() {
 
         <section style={s.card}>
           <h2 style={s.cardTitle}>Clienti e scadenze</h2>
+
+          <input
+            style={s.search}
+            type="search"
+            placeholder="Cerca per nome o email..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+
           <table style={s.table}>
             <thead>
               <tr>
@@ -308,15 +345,18 @@ export default function Home() {
                 <th style={s.th}>Giorni</th>
                 <th style={s.th}>Ultimo invio</th>
                 <th style={s.th}>Documento</th>
+                <th style={s.th}>Caricamento su RENTRI ESEGUITO</th>
                 <th style={s.th}>Azioni</th>
               </tr>
             </thead>
             <tbody>
-              {righe.map((r) => (
+              {righeFiltrate.map((r) => (
                 <tr key={r.id}>
-                  <td style={{ ...s.td, fontWeight: 600 }}>{r.ragione_sociale}</td>
+                  <td style={s.td}>
+                    <Link href={`/clients/${r.id}`} style={s.nameLink}>{r.ragione_sociale}</Link>
+                  </td>
                   <td style={s.td}>{r.email}</td>
-                  <td style={s.td}>{r.data.toLocaleDateString("it-IT")}</td>
+                  <td style={s.td}>{fmtData(r.ms)}</td>
                   <td style={s.td}>
                     <span style={s.badge(coloreGiorni(r.giorni))}>
                       {r.giorni < 0 ? `scaduta da ${-r.giorni} gg` : `${r.giorni} gg`}
@@ -356,6 +396,14 @@ export default function Home() {
                     />
                     {uploadingId === r.id && <span style={s.small}> caricamento...</span>}
                   </td>
+                  <td style={{ ...s.td, textAlign: "center" }}>
+                    <input
+                      type="checkbox"
+                      style={s.check}
+                      checked={!!r.rentri_caricato}
+                      onChange={(e) => handleRentri(r, e.target.checked)}
+                    />
+                  </td>
                   <td style={s.td}>
                     <button
                       style={s.btnSend}
@@ -369,7 +417,11 @@ export default function Home() {
               ))}
             </tbody>
           </table>
+
           {!loading && clients.length === 0 && <div style={s.empty}>Nessun cliente inserito.</div>}
+          {!loading && clients.length > 0 && righeFiltrate.length === 0 && (
+            <div style={s.empty}>Nessun cliente corrisponde alla ricerca.</div>
+          )}
         </section>
       </div>
     </div>
