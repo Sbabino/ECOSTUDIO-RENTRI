@@ -141,7 +141,7 @@ export default function Home() {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [uploadingId, setUploadingId] = useState(null);
-
+  const [sendingId, setSendingId] = useState(null);
   async function loadClients() {
     const res = await fetch("/api/clients");
     const data = await res.json();
@@ -203,7 +203,21 @@ export default function Home() {
     }
     loadClients();
   }
+  async function handleSend(client) {
+    if (!window.confirm(`Inviare la mail a ${client.ragione_sociale} (${client.email})?`)) return;
+    setError("");
+    setSendingId(client.id);
 
+    const res = await fetch(`/api/clients/${client.id}/send`, { method: "POST" });
+    const data = await res.json();
+    setSendingId(null);
+
+    if (!res.ok) {
+      setError(data.error);
+      return;
+    }
+    alert("Mail inviata");
+  }
   const righe = clients
     .map((c) => ({ ...c, ...prossimaScadenza(c.data_primo_carico, c.frequenza_giorni) }))
     .sort((a, b) => a.giorni - b.giorni);
@@ -309,7 +323,13 @@ export default function Home() {
                     {uploadingId === r.id && <span style={{ fontSize: 12, color: "#64748b" }}> caricamento...</span>}
                   </td>
                   <td style={s.td}>
-                    <button style={s.btnDisabled} disabled>Invia mail</button>
+                    <button
+                      style={{ ...s.btnDisabled, color: "#0f766e", borderColor: "#0f766e", background: "#fff", cursor: "pointer" }}
+                      onClick={() => handleSend(r)}
+                      disabled={sendingId === r.id}
+                    >
+                      {sendingId === r.id ? "Invio..." : "Invia mail"}
+                    </button>
                   </td>
                 </tr>
               ))}
