@@ -10,7 +10,7 @@ function getSupabase() {
 export async function GET() {
   const { data, error } = await getSupabase()
     .from("clients")
-    .select("*");
+    .select("*, notifications(data_invio_effettiva, status, tipo_invio)");
 
   if (error) {
     return Response.json({ error: error.message }, { status: 500 });
