@@ -22,6 +22,13 @@ function prossimaScadenza(dataPrimo, freq) {
   return { data: scadenza, giorni };
 }
 
+function ultimoInvioDi(client) {
+  const inviate = (client.notifications || [])
+    .filter((n) => n.status === "sent" && n.data_invio_effettiva)
+    .sort((a, b) => new Date(b.data_invio_effettiva) - new Date(a.data_invio_effettiva));
+  return inviate[0] || null;
+}
+
 function coloreGiorni(giorni) {
   if (giorni <= 7) return "#dc2626";
   if (giorni <= 15) return "#d97706";
@@ -37,7 +44,7 @@ const s = {
     padding: "32px 16px",
   },
   container: { maxWidth: 1100, margin: "0 auto" },
-    header: {
+  header: {
     background: "#115e59",
     color: "#ffffff",
     borderRadius: 12,
@@ -52,13 +59,13 @@ const s = {
     gap: 16,
     marginBottom: 24,
   },
-    statCard: {
+  statCard: {
     background: "#fff",
     borderRadius: 12,
     padding: 20,
     border: "1px solid #0f766e",
     boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-  },  
+  },
   statLabel: { fontSize: 13, color: "#64748b", margin: 0 },
   statValue: { fontSize: 30, fontWeight: 700, margin: "6px 0 0" },
   card: {
@@ -122,15 +129,19 @@ const s = {
     fontWeight: 600,
     fontSize: 13,
   }),
-  btnDisabled: {
+  btnSend: {
     padding: "6px 12px",
     borderRadius: 6,
-    border: "1px solid #cbd5e1",
-    background: "#f8fafc",
-    color: "#94a3b8",
+    border: "1px solid #0f766e",
+    background: "#fff",
+    color: "#0f766e",
     fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
   },
   link: { color: "#0f766e", fontWeight: 600, fontSize: 13, marginRight: 10 },
+  muted: { color: "#94a3b8", fontSize: 13 },
+  small: { fontSize: 12, color: "#64748b" },
   empty: { textAlign: "center", color: "#94a3b8", padding: 24 },
 };
 
@@ -142,6 +153,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [uploadingId, setUploadingId] = useState(null);
   const [sendingId, setSendingId] = useState(null);
+
   async function loadClients() {
     const res = await fetch("/api/clients");
     const data = await res.json();
@@ -203,6 +215,7 @@ export default function Home() {
     }
     loadClients();
   }
+
   async function handleSend(client) {
     if (!window.confirm(`Inviare la mail a ${client.ragione_sociale} (${client.email})?`)) return;
     setError("");
@@ -214,12 +227,16 @@ export default function Home() {
 
     if (!res.ok) {
       setError(data.error);
-      return;
     }
-    alert("Mail inviata");
+    loadClients();
   }
+
   const righe = clients
-    .map((c) => ({ ...c, ...prossimaScadenza(c.data_primo_carico, c.frequenza_giorni) }))
+    .map((c) => ({
+      ...c,
+      ...prossimaScadenza(c.data_primo_carico, c.frequenza_giorni),
+      ultimoInvio: ultimoInvioDi(c),
+    }))
     .sort((a, b) => a.giorni - b.giorni);
 
   const urgenti = righe.filter((r) => r.giorni <= 7).length;
@@ -289,6 +306,7 @@ export default function Home() {
                 <th style={s.th}>Email</th>
                 <th style={s.th}>Prossima scadenza</th>
                 <th style={s.th}>Giorni</th>
+                <th style={s.th}>Ultimo invio</th>
                 <th style={s.th}>Documento</th>
                 <th style={s.th}>Azioni</th>
               </tr>
@@ -305,12 +323,28 @@ export default function Home() {
                     </span>
                   </td>
                   <td style={s.td}>
+                    {r.ultimoInvio ? (
+                      <>
+                        {new Date(r.ultimoInvio.data_invio_effettiva).toLocaleString("it-IT", {
+                          dateStyle: "short",
+                          timeStyle: "short",
+                        })}
+                        <br />
+                        <span style={s.small}>
+                          {r.ultimoInvio.tipo_invio === "manuale" ? "manuale" : "automatico"}
+                        </span>
+                      </>
+                    ) : (
+                      <span style={s.muted}>mai inviata</span>
+                    )}
+                  </td>
+                  <td style={s.td}>
                     {r.file_word_path ? (
                       <a style={s.link} href={`/api/clients/${r.id}/file`} target="_blank" rel="noreferrer">
                         Scarica
                       </a>
                     ) : (
-                      <span style={{ color: "#94a3b8", fontSize: 13 }}>nessun file</span>
+                      <span style={s.muted}>nessun file</span>
                     )}
                     <br />
                     <input
@@ -320,11 +354,11 @@ export default function Home() {
                       onChange={(e) => handleUpload(r.id, e.target.files[0])}
                       style={{ fontSize: 12, marginTop: 4 }}
                     />
-                    {uploadingId === r.id && <span style={{ fontSize: 12, color: "#64748b" }}> caricamento...</span>}
+                    {uploadingId === r.id && <span style={s.small}> caricamento...</span>}
                   </td>
                   <td style={s.td}>
                     <button
-                      style={{ ...s.btnDisabled, color: "#0f766e", borderColor: "#0f766e", background: "#fff", cursor: "pointer" }}
+                      style={s.btnSend}
                       onClick={() => handleSend(r)}
                       disabled={sendingId === r.id}
                     >
