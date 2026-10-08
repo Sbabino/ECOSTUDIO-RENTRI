@@ -34,9 +34,9 @@ export async function POST(request) {
     );
   }
 
-  if (![15, 30, 60].includes(frequenza_giorni)) {
+  if (!Number.isInteger(frequenza_giorni) || frequenza_giorni < 1 || frequenza_giorni > 365) {
     return Response.json(
-      { error: "Frequenza non valida (15, 30 o 60)" },
+      { error: "Frequenza non valida (da 1 a 365 giorni)" },
       { status: 400 }
     );
   }
