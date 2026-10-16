@@ -23,5 +23,7 @@ export async function middleware(request) {
 }
 
 export const config = {
-  matcher: ["/((?!login|api/login|_next/static|_next/image|favicon.ico).*)"],
+  // api/cron è escluso: lo chiama Vercel Cron senza cookie di sessione.
+  // La route si protegge da sola con "Authorization: Bearer CRON_SECRET".
+  matcher: ["/((?!login|api/login|api/cron|_next/static|_next/image|favicon.ico).*)"],
 };

@@ -1,5 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 
+const BUCKET = "rentri-documents";
+
 function getSupabase() {
   return createClient(
     process.env.SUPABASE_URL,
@@ -24,6 +26,63 @@ export async function GET(request, { params }) {
     (a, b) => new Date(b.created_at) - new Date(a.created_at)
   );
   return Response.json(data);
+}
+
+// Elimina il cliente con storico invii e documenti caricati
+export async function DELETE(request, { params }) {
+  const { id } = await params;
+  if (!/^\d+$/.test(id)) {
+    return Response.json({ error: "Id non valido" }, { status: 400 });
+  }
+
+  const supabase = getSupabase();
+
+  const { data: client, error: readErr } = await supabase
+    .from("clients")
+    .select("id")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (readErr) {
+    return Response.json({ error: readErr.message }, { status: 500 });
+  }
+  if (!client) {
+    return Response.json({ error: "Cliente non trovato" }, { status: 404 });
+  }
+
+  let { error: delErr } = await supabase.from("clients").delete().eq("id", id);
+
+  // 23503 = chiave esterna: nel DB lo storico invii non si cancella a cascata.
+  // Elimino prima lo storico e riprovo (così, se la prima cancellazione fallisce per altro, lo storico non si perde).
+  if (delErr && delErr.code === "23503") {
+    const { error: nErr } = await supabase.from("notifications").delete().eq("client_id", id);
+    if (nErr) {
+      return Response.json({ error: nErr.message }, { status: 500 });
+    }
+    ({ error: delErr } = await supabase.from("clients").delete().eq("id", id));
+  }
+
+  if (delErr) {
+    return Response.json({ error: delErr.message }, { status: 500 });
+  }
+
+  // Pulizia documenti: ogni upload crea un file nuovo, li rimuovo tutti.
+  // Se fallisce il cliente è comunque già eliminato: lo segnalo senza bloccare.
+  let documentiRimossi = true;
+  try {
+    const cartella = `clients/${id}`;
+    const { data: files } = await supabase.storage.from(BUCKET).list(cartella, { limit: 1000 });
+    if (files && files.length > 0) {
+      const { error: rmErr } = await supabase.storage
+        .from(BUCKET)
+        .remove(files.map((f) => `${cartella}/${f.name}`));
+      if (rmErr) documentiRimossi = false;
+    }
+  } catch {
+    documentiRimossi = false;
+  }
+
+  return Response.json({ ok: true, documentiRimossi });
 }
 
 // Modifica frequenza e/o spunta "Caricamento su RENTRI ESEGUITO"

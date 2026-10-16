@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { prossimaScadenza } from "../lib/scadenze";
+import SiteHeader from "./components/SiteHeader";
 
 const emptyForm = {
   ragione_sociale: "",
@@ -142,6 +143,16 @@ const s = {
     fontWeight: 600,
     cursor: "pointer",
   },
+  btnDelete: {
+    padding: "6px 12px",
+    borderRadius: 6,
+    border: "1px solid #dc2626",
+    background: "#fff",
+    color: "#dc2626",
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+  },
   link: { color: "#0f766e", fontWeight: 600, fontSize: 13, marginRight: 10 },
   muted: { color: "#94a3b8", fontSize: 13 },
   small: { fontSize: 12, color: "#64748b" },
@@ -157,6 +168,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [uploadingId, setUploadingId] = useState(null);
   const [sendingId, setSendingId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
   const [search, setSearch] = useState("");
 
   async function loadClients() {
@@ -236,6 +248,29 @@ export default function Home() {
     loadClients();
   }
 
+  async function handleDelete(client) {
+    const ok = window.confirm(
+      `Eliminare DEFINITIVAMENTE "${client.ragione_sociale}"?\n\n` +
+        "Verranno cancellati anche lo storico degli invii e i documenti caricati. L'operazione non si può annullare."
+    );
+    if (!ok) return;
+    setError("");
+    setDeletingId(client.id);
+
+    const res = await fetch(`/api/clients/${client.id}`, { method: "DELETE" });
+    const data = await res.json().catch(() => ({}));
+    setDeletingId(null);
+
+    if (!res.ok) {
+      setError(data.error || "Eliminazione non riuscita");
+      return;
+    }
+    if (data.documentiRimossi === false) {
+      setError("Cliente eliminato, ma non è stato possibile rimuovere i documenti dallo storage.");
+    }
+    loadClients();
+  }
+
   async function handleRentri(client, checked) {
     setError("");
     const res = await fetch(`/api/clients/${client.id}`, {
@@ -276,10 +311,7 @@ export default function Home() {
   return (
     <div style={s.page}>
       <div style={s.container}>
-        <header style={s.header}>
-          <h1 style={s.title}>Portale RENTRI</h1>
-          <p style={s.subtitle}>Gestione clienti, scadenze e notifiche</p>
-        </header>
+        <SiteHeader attiva="rentri" sottotitolo="RENTRI - Gestione clienti, scadenze e notifiche" />
 
         <div style={s.stats}>
           <div style={s.statCard}>
@@ -411,6 +443,13 @@ export default function Home() {
                       disabled={sendingId === r.id}
                     >
                       {sendingId === r.id ? "Invio..." : "Invia mail"}
+                    </button>{" "}
+                    <button
+                      style={s.btnDelete}
+                      onClick={() => handleDelete(r)}
+                      disabled={deletingId === r.id}
+                    >
+                      {deletingId === r.id ? "Eliminazione..." : "Elimina"}
                     </button>
                   </td>
                 </tr>
