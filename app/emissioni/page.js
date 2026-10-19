@@ -4,9 +4,26 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import SiteHeader from "../components/SiteHeader";
 import { oggiRoma } from "../../lib/scadenze";
-import { statoEmissione, avvisoPredefinito, MESI_PREAVVISO } from "../../lib/emissioni";
+import {
+  statoEmissione,
+  avvisoPredefinito,
+  avvisiPersonalizzati,
+  validaAvvisi,
+  isoValida,
+  CAMPI_AVVISO,
+  NOMI_AVVISO,
+  GIORNI_PREAVVISO,
+} from "../../lib/emissioni";
 
-const emptyForm = { ragione_sociale: "", data_scadenza: "", data_avviso: "", email: "", telefono: "" };
+const emptyForm = {
+  ragione_sociale: "",
+  data_scadenza: "",
+  data_avviso_1: "",
+  data_avviso_2: "",
+  data_avviso_3: "",
+  email: "",
+  telefono: "",
+};
 
 const fmtIso = (iso) => (iso ? iso.split("-").reverse().join("/") : "—");
 const fmtDataOra = (ts) =>
@@ -14,22 +31,8 @@ const fmtDataOra = (ts) =>
 
 function coloreStato(st) {
   if (st.scaduta || st.giorni <= 30) return "#dc2626";
-  if (st.inFinestra) return "#d97706";
+  if (st.daInviare) return "#d97706";
   return "#0f766e";
-}
-
-// Avviso inviato (automatico o manuale) per la scadenza attuale, il più recente
-function avvisoInviatoDi(c) {
-  const inviati = (c.emissioni_notifiche || [])
-    .filter((n) => n.status === "sent" && n.data_scadenza_rif === c.data_scadenza && n.data_invio_effettiva)
-    .sort((a, b) => new Date(b.data_invio_effettiva) - new Date(a.data_invio_effettiva));
-  return inviati[0] || null;
-}
-
-function haTentativoFallito(c) {
-  return (c.emissioni_notifiche || []).some(
-    (n) => n.status === "failed" && n.data_scadenza_rif === c.data_scadenza
-  );
 }
 
 async function leggiRisposta(res) {
@@ -48,7 +51,7 @@ const s = {
     color: "#0f172a",
     padding: "32px 16px",
   },
-  container: { maxWidth: 1100, margin: "0 auto" },
+  container: { maxWidth: 1320, margin: "0 auto" },
   stats: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
@@ -89,6 +92,7 @@ const s = {
     boxSizing: "border-box",
   },
   dateInput: {
+    width: 138,
     padding: "6px 8px",
     borderRadius: 6,
     border: "1px solid #cbd5e1",
@@ -230,7 +234,7 @@ export default function EmissioniPage() {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  // id -> { data_scadenza?, data_avviso? } modifiche non ancora salvate
+  // id -> { data_scadenza?, data_avviso_1?, data_avviso_2?, data_avviso_3? } modifiche non ancora salvate
   const [bozze, setBozze] = useState({});
   const [savingId, setSavingId] = useState(null);
   const [sendingId, setSendingId] = useState(null);
@@ -320,29 +324,45 @@ export default function EmissioniPage() {
     });
   }
 
-  // Salva le modifiche della riga (scadenza e/o data avviso). `forzaAvviso` = null per tornare al predefinito.
-  async function salvaRiga(c, forzaAvviso) {
+  // Salva le modifiche della riga (scadenza e/o date dei tre avvisi)
+  async function salvaRiga(c) {
     const bz = bozze[c.id] || {};
-    const body = {};
     const scadAttuale = c.data_scadenza;
-    const avvisoMostrato = c.data_avviso || avvisoPredefinito(c.data_scadenza);
-
-    if (bz.data_scadenza && bz.data_scadenza !== scadAttuale) body.data_scadenza = bz.data_scadenza;
-    if (forzaAvviso === null) body.data_avviso = null;
-    else if (bz.data_avviso && (bz.data_avviso !== avvisoMostrato || body.data_scadenza)) {
-      // Se cambia anche la scadenza, la data avviso digitata va sempre inviata (altrimenti il server la azzera)
-      body.data_avviso = bz.data_avviso;
+    const scadFinale = bz.data_scadenza || scadAttuale;
+    if (!isoValida(scadFinale)) {
+      setError("Scadenza emissioni non valida");
+      return;
     }
+    const scadCambiata = scadFinale !== scadAttuale;
+
+    const body = {};
+    if (scadCambiata) body.data_scadenza = scadFinale;
+    CAMPI_AVVISO.forEach((campo, i) => {
+      const v = bz[campo];
+      // Se cambia anche la scadenza, le date digitate vanno sempre inviate (altrimenti il server le azzera)
+      if (v && (v !== c.st.avvisi[i].iso || scadCambiata)) body[campo] = v;
+    });
 
     if (Object.keys(body).length === 0) {
       scartaBozza(c.id);
       return;
     }
 
-    // Controllo subito, il server lo ripete: l'avviso non può partire dopo la scadenza
-    const scadFinale = body.data_scadenza || scadAttuale;
-    if (body.data_avviso && body.data_avviso > scadFinale) {
-      setError("La data avviso non può essere dopo la scadenza emissioni");
+    // Controllo subito, il server lo ripete: nessun avviso dopo la scadenza e ordine 1° < 2° < 3°
+    const finali = scadCambiata ? [null, null, null] : avvisiPersonalizzati(c);
+    CAMPI_AVVISO.forEach((campo, i) => {
+      if (campo in body) {
+        if (!isoValida(body[campo])) finali[i] = "data non valida";
+        else finali[i] = body[campo];
+      }
+    });
+    if (finali.includes("data non valida")) {
+      setError("Data avviso non valida");
+      return;
+    }
+    const errAvvisi = validaAvvisi(scadFinale, finali);
+    if (errAvvisi) {
+      setError(errAvvisi);
       return;
     }
 
@@ -360,17 +380,47 @@ export default function EmissioniPage() {
       setError(data.error || "Salvataggio non riuscito");
       return;
     }
-    if (body.data_scadenza && !("data_avviso" in body) && c.data_avviso) {
+    if (scadCambiata && avvisiPersonalizzati(c).some(Boolean) && !CAMPI_AVVISO.some((campo) => campo in body)) {
       setInfo(
-        `Scadenza aggiornata. La data avviso di ${c.ragione_sociale} è tornata a ${MESI_PREAVVISO} mesi prima della nuova scadenza.`
+        `Scadenza aggiornata. Gli avvisi di ${c.ragione_sociale} sono tornati a ${GIORNI_PREAVVISO.join("/")} giorni prima della nuova scadenza.`
       );
     }
     scartaBozza(c.id);
     loadClienti();
   }
 
+  // Riporta UN avviso alla data predefinita
+  async function ripristinaAvviso(c, campo) {
+    setError("");
+    setInfo("");
+    setSavingId(c.id);
+    const res = await fetch(`/api/emissioni/${c.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [campo]: null }),
+    });
+    const data = await leggiRisposta(res);
+    setSavingId(null);
+    if (!res.ok) {
+      setError(data.error || "Operazione non riuscita");
+      return;
+    }
+    setBozze((b) => {
+      if (!b[c.id]) return b;
+      const { [campo]: _tolto, ...resto } = b[c.id];
+      return { ...b, [c.id]: resto };
+    });
+    loadClienti();
+  }
+
   async function handleSend(c) {
-    if (!window.confirm(`Inviare l'avviso scadenza emissioni a ${c.ragione_sociale} (${c.email})?`)) return;
+    const num = c.st.numeroManuale;
+    if (
+      !window.confirm(
+        `Inviare l'avviso scadenza emissioni a ${c.ragione_sociale} (${c.email})?\n\nVerrà registrato come ${NOMI_AVVISO[num - 1]}.`
+      )
+    )
+      return;
     setError("");
     setInfo("");
     setSendingId(c.id);
@@ -378,7 +428,7 @@ export default function EmissioniPage() {
     const data = await leggiRisposta(res);
     setSendingId(null);
     if (!res.ok) setError(data.error || "Invio non riuscito");
-    else setInfo(data.avviso || `Mail inviata a ${c.ragione_sociale}`);
+    else setInfo(data.avviso || `Mail inviata a ${c.ragione_sociale} (${NOMI_AVVISO[(data.numero_avviso || num) - 1]})`);
     loadClienti();
   }
 
@@ -405,9 +455,7 @@ export default function EmissioniPage() {
   const righe = clienti
     .map((c) => ({
       ...c,
-      st: statoEmissione(c.data_scadenza, oggi, c.data_avviso),
-      inviato: avvisoInviatoDi(c),
-      fallito: haTentativoFallito(c),
+      st: statoEmissione(c.data_scadenza, oggi, avvisiPersonalizzati(c), c.emissioni_notifiche),
     }))
     .sort((a, b) => a.st.scadenzaMs - b.st.scadenzaMs);
 
@@ -420,8 +468,8 @@ export default function EmissioniPage() {
       )
     : righe;
 
-  // Data avviso raggiunta, scadenza non passata e avviso non ancora inviato
-  const inFinestra = righe.filter((r) => r.st.inFinestra && !r.inviato).length;
+  // Clienti con un avviso dovuto (data raggiunta, scadenza non passata, non ancora inviato)
+  const daInviare = righe.filter((r) => r.st.daInviare).length;
   const scadute = righe.filter((r) => r.st.scaduta).length;
   const senzaEmail = righe.filter((r) => !r.email).length;
 
@@ -439,8 +487,8 @@ export default function EmissioniPage() {
             <p style={s.statValue}>{clienti.length}</p>
           </div>
           <div style={s.statCard}>
-            <p style={s.statLabel}>Avvisi da inviare (data avviso raggiunta)</p>
-            <p style={{ ...s.statValue, color: inFinestra > 0 ? "#d97706" : "#0f172a" }}>{inFinestra}</p>
+            <p style={s.statLabel}>Avvisi da inviare (data raggiunta)</p>
+            <p style={{ ...s.statValue, color: daInviare > 0 ? "#d97706" : "#0f172a" }}>{daInviare}</p>
           </div>
           <div style={s.statCard}>
             <p style={s.statLabel}>Scadute</p>
@@ -467,7 +515,8 @@ export default function EmissioniPage() {
           <h2 style={s.cardTitle}>Importa anagrafica da Excel</h2>
           <p style={s.hint}>
             Colonne del template: <strong>ANAGRAFICA CLIENTE</strong>, <strong>SCADENZA EMISSIONI</strong> (GG/MM/AAAA),
-            <strong> DATA AVVISO</strong> (facoltativa: se vuota l&apos;avviso parte {MESI_PREAVVISO} mesi prima della scadenza),
+            <strong> PRIMO AVVISO</strong>, <strong>SECONDO AVVISO</strong>, <strong>TERZO AVVISO</strong> (facoltative:
+            se vuote gli avvisi partono {GIORNI_PREAVVISO.join(", ")} giorni prima della scadenza),
             più <strong>EMAIL</strong> e TELEFONO. L&apos;email serve per l&apos;avviso automatico: senza email il cliente
             viene caricato ma non riceve avvisi. Se il cliente esiste già (stesso nome) viene aggiornato; i clienti
             non presenti nel file non vengono toccati.
@@ -543,18 +592,25 @@ export default function EmissioniPage() {
                 <label style={s.label}>Scadenza emissioni *</label>
                 <input style={s.input} name="data_scadenza" type="date" value={form.data_scadenza} onChange={handleChange} required />
               </div>
-              <div>
-                <label style={s.label}>Data avviso (facoltativa)</label>
-                <input
-                  style={s.input}
-                  name="data_avviso"
-                  type="date"
-                  value={form.data_avviso}
-                  max={form.data_scadenza || undefined}
-                  onChange={handleChange}
-                />
-                <span style={s.small}>Se vuota: {MESI_PREAVVISO} mesi prima della scadenza</span>
-              </div>
+              {CAMPI_AVVISO.map((campo, i) => (
+                <div key={campo}>
+                  <label style={s.label}>{NOMI_AVVISO[i]} (facoltativo)</label>
+                  <input
+                    style={s.input}
+                    name={campo}
+                    type="date"
+                    value={form[campo]}
+                    max={form.data_scadenza || undefined}
+                    onChange={handleChange}
+                  />
+                  <span style={s.small}>
+                    Se vuoto: {GIORNI_PREAVVISO[i]} giorni prima
+                    {isoValida(form.data_scadenza)
+                      ? ` (${fmtIso(avvisoPredefinito(form.data_scadenza, i + 1))})`
+                      : " della scadenza"}
+                  </span>
+                </div>
+              ))}
               <div>
                 <label style={s.label}>Email (per l&apos;avviso)</label>
                 <input style={s.input} name="email" type="email" value={form.email} onChange={handleChange} />
@@ -588,21 +644,26 @@ export default function EmissioniPage() {
                   <th style={s.th}>Cliente</th>
                   <th style={s.th}>Contatti</th>
                   <th style={s.th}>Scadenza emissioni</th>
-                  <th style={s.th}>Data avviso</th>
-                  <th style={s.th}>Stato avviso</th>
+                  {NOMI_AVVISO.map((nome, i) => (
+                    <th key={nome} style={s.th}>
+                      {nome}
+                      <div style={{ fontWeight: 400, fontSize: 11 }}>di default {GIORNI_PREAVVISO[i]} gg prima</div>
+                    </th>
+                  ))}
                   <th style={s.th}>Azioni</th>
                 </tr>
               </thead>
               <tbody>
                 {righeFiltrate.map((r) => {
                   const bz = bozze[r.id] || {};
-                  const scadCambiata = !!bz.data_scadenza && bz.data_scadenza !== r.data_scadenza;
-                  // Se cambia la scadenza senza toccare l'avviso, il server riporta l'avviso al predefinito:
-                  // lo mostro già nell'anteprima
-                  const avvisoMostrato =
-                    bz.data_avviso ?? (scadCambiata ? avvisoPredefinito(bz.data_scadenza) : r.st.avvisoIso);
-                  const avvisoCambiato = !!bz.data_avviso && bz.data_avviso !== r.st.avvisoIso;
-                  const modificata = scadCambiata || avvisoCambiato;
+                  const scadCambiata = !!bz.data_scadenza && isoValida(bz.data_scadenza) && bz.data_scadenza !== r.data_scadenza;
+                  // Valore mostrato in ciascun avviso: quello digitato; se cambia la scadenza senza toccarlo,
+                  // il server lo riporta al predefinito e lo mostro già nell'anteprima
+                  const mostrato = (i) =>
+                    bz[CAMPI_AVVISO[i]] ??
+                    (scadCambiata ? avvisoPredefinito(bz.data_scadenza, i + 1) : r.st.avvisi[i].iso);
+                  const avvisoCambiato = (i) => !!bz[CAMPI_AVVISO[i]] && bz[CAMPI_AVVISO[i]] !== r.st.avvisi[i].iso;
+                  const modificata = scadCambiata || CAMPI_AVVISO.some((_, i) => avvisoCambiato(i));
                   return (
                     <tr key={r.id}>
                       <td style={s.td}>
@@ -632,35 +693,62 @@ export default function EmissioniPage() {
                           </span>
                         </div>
                       </td>
-                      <td style={s.td}>
-                        <input
-                          type="date"
-                          style={s.dateInput}
-                          value={avvisoMostrato}
-                          max={bz.data_scadenza ?? r.data_scadenza}
-                          onChange={(e) => modificaBozza(r.id, "data_avviso", e.target.value)}
-                        />
-                        <div style={{ marginTop: 6 }}>
-                          <span style={s.small}>
-                            {r.st.avvisoPersonalizzato ? "personalizzata" : `predefinita (${MESI_PREAVVISO} mesi prima)`}
-                          </span>
-                          {r.st.avvisoPersonalizzato && (
-                            <>
-                              {" "}
-                              <button
-                                style={s.btnLink}
-                                onClick={() => salvaRiga(r, null)}
-                                disabled={savingId === r.id}
-                                title={`Riporta la data avviso a ${MESI_PREAVVISO} mesi prima della scadenza`}
-                              >
-                                ripristina
-                              </button>
-                            </>
-                          )}
-                        </div>
+                      {CAMPI_AVVISO.map((campo, i) => {
+                        const av = r.st.avvisi[i];
+                        const daSalvare = scadCambiata || avvisoCambiato(i);
+                        return (
+                          <td key={campo} style={s.td}>
+                            <input
+                              type="date"
+                              style={s.dateInput}
+                              value={mostrato(i)}
+                              max={bz.data_scadenza ?? r.data_scadenza}
+                              onChange={(e) => modificaBozza(r.id, campo, e.target.value)}
+                            />
+                            <div style={{ marginTop: 6 }}>
+                              {daSalvare ? (
+                                <span style={{ ...s.small, color: "#d97706", fontWeight: 600 }}>da salvare</span>
+                              ) : av.stato === "inviato" ? (
+                                <span style={{ fontSize: 12, color: "#065f46", fontWeight: 600 }}>
+                                  Inviato il {fmtDataOra(av.inviato.data_invio_effettiva)}
+                                  <span style={{ ...s.small, fontWeight: 400 }}>
+                                    {" "}
+                                    ({av.inviato.tipo_invio === "manuale" ? "manuale" : "automatico"})
+                                  </span>
+                                </span>
+                              ) : av.stato === "da_inviare" ? (
+                                <span style={{ fontSize: 12, color: "#d97706", fontWeight: 600 }}>Da inviare</span>
+                              ) : av.stato === "saltato" ? (
+                                <span style={s.muted}>Saltato</span>
+                              ) : av.stato === "non_inviato" ? (
+                                <span style={s.muted}>Non inviato</span>
+                              ) : (
+                                <span style={s.muted}>In programma</span>
+                              )}
+                              {!daSalvare && av.stato !== "inviato" && av.fallito && (
+                                <div style={s.smallRed}>ultimo tentativo fallito</div>
+                              )}
+                            </div>
+                            <div style={{ marginTop: 2 }}>
+                              <span style={s.small}>{av.personalizzata ? "personalizzata" : "predefinita"}</span>
+                              {av.personalizzata && (
+                                <button
+                                  style={s.btnLink}
+                                  onClick={() => ripristinaAvviso(r, campo)}
+                                  disabled={savingId === r.id}
+                                  title={`Riporta il ${NOMI_AVVISO[i]} a ${GIORNI_PREAVVISO[i]} giorni prima della scadenza`}
+                                >
+                                  ripristina
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        );
+                      })}
+                      <td style={{ ...s.td, whiteSpace: "nowrap" }}>
                         {modificata && (
-                          <div style={{ marginTop: 6 }}>
-                            <button style={s.btnSave} onClick={() => salvaRiga(r)} disabled={savingId === r.id}>
+                          <div style={{ marginBottom: 8 }}>
+                            <button style={{ ...s.btnSave, marginLeft: 0 }} onClick={() => salvaRiga(r)} disabled={savingId === r.id}>
                               {savingId === r.id ? "..." : "Salva"}
                             </button>
                             <button style={s.btnLink} onClick={() => scartaBozza(r.id)} disabled={savingId === r.id}>
@@ -668,36 +756,11 @@ export default function EmissioniPage() {
                             </button>
                           </div>
                         )}
-                      </td>
-                      <td style={s.td}>
-                        {r.inviato ? (
-                          <>
-                            Inviato il {fmtDataOra(r.inviato.data_invio_effettiva)}
-                            <br />
-                            <span style={s.small}>{r.inviato.tipo_invio === "manuale" ? "manuale" : "automatico"}</span>
-                          </>
-                        ) : r.st.scaduta ? (
-                          <span style={s.muted}>scaduta, nessun avviso</span>
-                        ) : r.st.inFinestra ? (
-                          <span style={{ color: "#d97706", fontWeight: 600, fontSize: 13 }}>
-                            Dovuto dal {fmtIso(r.st.avvisoIso)}
-                          </span>
-                        ) : (
-                          <span style={s.muted}>Previsto il {fmtIso(r.st.avvisoIso)}</span>
-                        )}
-                        {!r.inviato && r.fallito && (
-                          <>
-                            <br />
-                            <span style={s.smallRed}>ultimo tentativo fallito</span>
-                          </>
-                        )}
-                      </td>
-                      <td style={{ ...s.td, whiteSpace: "nowrap" }}>
                         <button
                           style={{ ...s.btnOutline, opacity: r.email ? 1 : 0.4 }}
                           onClick={() => handleSend(r)}
                           disabled={!r.email || sendingId === r.id}
-                          title={r.email ? "" : "Email mancante"}
+                          title={r.email ? `Invia ora (registrato come ${NOMI_AVVISO[r.st.numeroManuale - 1]})` : "Email mancante"}
                         >
                           {sendingId === r.id ? "Invio..." : "Invia mail"}
                         </button>{" "}

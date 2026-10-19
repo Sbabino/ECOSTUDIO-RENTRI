@@ -1,5 +1,5 @@
 import { getSupabase, leggiTutti } from "../../../lib/supabase";
-import { EMAIL_REGEX, isoValida } from "../../../lib/emissioni";
+import { EMAIL_REGEX, isoValida, CAMPI_AVVISO, validaAvvisi, normalizzaAvvisi } from "../../../lib/emissioni";
 
 export const dynamic = "force-dynamic";
 
@@ -10,7 +10,7 @@ export async function GET() {
     const clienti = await leggiTutti((da, a) =>
       supabase
         .from("emissioni_clienti")
-        .select("*, emissioni_notifiche(data_scadenza_rif, data_invio_effettiva, status, tipo_invio)")
+        .select("*, emissioni_notifiche(numero_avviso, data_scadenza_rif, data_invio_effettiva, status, tipo_invio)")
         .order("id", { ascending: true })
         .range(da, a)
     );
@@ -32,8 +32,8 @@ export async function POST(request) {
   const email = (body.email || "").trim();
   const telefono = (body.telefono || "").trim();
   const data_scadenza = body.data_scadenza;
-  // Facoltativa: se vuota vale il predefinito (3 mesi prima della scadenza)
-  const data_avviso = body.data_avviso ? String(body.data_avviso) : null;
+  // Facoltative: se vuote valgono i predefiniti (scadenza meno 90, 60 e 30 giorni)
+  const avvisiIn = CAMPI_AVVISO.map((campo) => (body[campo] ? String(body[campo]) : null));
 
   if (!ragione_sociale || !data_scadenza) {
     return Response.json({ error: "Anagrafica cliente e scadenza sono obbligatorie" }, { status: 400 });
@@ -44,12 +44,16 @@ export async function POST(request) {
   if (!isoValida(data_scadenza)) {
     return Response.json({ error: "Data di scadenza non valida" }, { status: 400 });
   }
-  if (data_avviso && !isoValida(data_avviso)) {
-    return Response.json({ error: "Data avviso non valida" }, { status: 400 });
+  for (let i = 0; i < avvisiIn.length; i++) {
+    if (avvisiIn[i] && !isoValida(avvisiIn[i])) {
+      return Response.json({ error: `Data del ${i + 1}° avviso non valida` }, { status: 400 });
+    }
   }
-  if (data_avviso && data_avviso > data_scadenza) {
-    return Response.json({ error: "La data avviso non può essere dopo la scadenza" }, { status: 400 });
+  const erroreAvvisi = validaAvvisi(data_scadenza, avvisiIn);
+  if (erroreAvvisi) {
+    return Response.json({ error: erroreAvvisi }, { status: 400 });
   }
+  const avvisi = normalizzaAvvisi(data_scadenza, avvisiIn);
   if (email && (!EMAIL_REGEX.test(email) || email.length > 255)) {
     return Response.json({ error: "Email non valida" }, { status: 400 });
   }
@@ -64,7 +68,7 @@ export async function POST(request) {
       email: email || null,
       telefono: telefono || null,
       data_scadenza,
-      data_avviso,
+      ...Object.fromEntries(CAMPI_AVVISO.map((campo, i) => [campo, avvisi[i]])),
     })
     .select()
     .single();

@@ -1,5 +1,12 @@
 import { getSupabase } from "../../../../lib/supabase";
-import { EMAIL_REGEX, isoValida } from "../../../../lib/emissioni";
+import {
+  EMAIL_REGEX,
+  isoValida,
+  CAMPI_AVVISO,
+  avvisiPersonalizzati,
+  validaAvvisi,
+  normalizzaAvvisi,
+} from "../../../../lib/emissioni";
 
 export const dynamic = "force-dynamic";
 
@@ -29,7 +36,9 @@ export async function GET(request, { params }) {
   return Response.json(data);
 }
 
-// Modifica anagrafica (nome, email, telefono), scadenza e data avviso. Si inviano solo i campi da cambiare.
+// Modifica anagrafica (nome, email, telefono), scadenza e date dei tre avvisi.
+// Si inviano solo i campi da cambiare. Per gli avvisi: data_avviso_1, data_avviso_2, data_avviso_3
+// (valore vuoto/null = torna al predefinito: scadenza meno 90 / 60 / 30 giorni).
 export async function PATCH(request, { params }) {
   const { id } = await params;
   if (!/^\d+$/.test(id)) {
@@ -39,43 +48,51 @@ export async function PATCH(request, { params }) {
   const update = { updated_at: new Date().toISOString() };
   const supabase = getSupabase();
 
-  if ("data_scadenza" in body) {
-    if (!isoValida(body.data_scadenza)) {
-      return Response.json({ error: "Data di scadenza non valida" }, { status: 400 });
+  const cambiaScadenza = "data_scadenza" in body;
+  const campiAvvisoInviati = CAMPI_AVVISO.filter((campo) => campo in body);
+
+  if (cambiaScadenza && !isoValida(body.data_scadenza)) {
+    return Response.json({ error: "Data di scadenza non valida" }, { status: 400 });
+  }
+  for (const campo of campiAvvisoInviati) {
+    if (body[campo] && !isoValida(String(body[campo]))) {
+      return Response.json({ error: `Data del ${campo.slice(-1)}° avviso non valida` }, { status: 400 });
     }
-    update.data_scadenza = body.data_scadenza;
-    // Scadenza spostata (es. analisi rinnovata): la vecchia data avviso non ha più senso,
-    // si torna al predefinito (3 mesi prima) a meno che non ne venga indicata una nuova.
-    update.data_avviso = null;
   }
 
-  if ("data_avviso" in body) {
-    const avviso = body.data_avviso ? String(body.data_avviso) : null; // vuoto/null = predefinito
-    if (avviso && !isoValida(avviso)) {
-      return Response.json({ error: "Data avviso non valida" }, { status: 400 });
+  if (cambiaScadenza || campiAvvisoInviati.length > 0) {
+    // Stato attuale: serve per confrontare le date nel loro insieme (ordine 1° < 2° < 3°, nessuna dopo la scadenza)
+    const { data: attuale, error: readErr } = await supabase
+      .from("emissioni_clienti")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+    if (readErr) {
+      return Response.json({ error: readErr.message }, { status: 500 });
     }
-    if (avviso) {
-      // Scadenza di confronto: quella nuova se sto cambiando anche quella, altrimenti quella attuale
-      let scadenza = update.data_scadenza;
-      if (!scadenza) {
-        const { data: attuale, error: readErr } = await supabase
-          .from("emissioni_clienti")
-          .select("data_scadenza")
-          .eq("id", id)
-          .maybeSingle();
-        if (readErr) {
-          return Response.json({ error: readErr.message }, { status: 500 });
-        }
-        if (!attuale) {
-          return Response.json({ error: "Cliente non trovato" }, { status: 404 });
-        }
-        scadenza = attuale.data_scadenza;
-      }
-      if (avviso > scadenza) {
-        return Response.json({ error: "La data avviso non può essere dopo la scadenza" }, { status: 400 });
-      }
+    if (!attuale) {
+      return Response.json({ error: "Cliente non trovato" }, { status: 404 });
     }
-    update.data_avviso = avviso;
+
+    const scadenza = cambiaScadenza ? body.data_scadenza : attuale.data_scadenza;
+    // Se la scadenza si sposta (es. analisi rinnovata) le vecchie date personalizzate non hanno più senso:
+    // si riparte dai predefiniti, a meno che nella stessa richiesta non ne vengano indicate di nuove.
+    const spostata = cambiaScadenza && body.data_scadenza !== attuale.data_scadenza;
+    let avvisi = spostata ? [null, null, null] : avvisiPersonalizzati(attuale);
+    CAMPI_AVVISO.forEach((campo, i) => {
+      if (campo in body) avvisi[i] = body[campo] ? String(body[campo]) : null;
+    });
+
+    const errore = validaAvvisi(scadenza, avvisi);
+    if (errore) {
+      return Response.json({ error: errore }, { status: 400 });
+    }
+    avvisi = normalizzaAvvisi(scadenza, avvisi);
+
+    if (cambiaScadenza) update.data_scadenza = scadenza;
+    CAMPI_AVVISO.forEach((campo, i) => {
+      update[campo] = avvisi[i];
+    });
   }
 
   if ("ragione_sociale" in body) {

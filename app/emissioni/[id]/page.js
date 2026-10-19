@@ -8,9 +8,13 @@ import { oggiRoma } from "../../../lib/scadenze";
 import {
   statoEmissione,
   avvisoPredefinito,
+  avvisiPersonalizzati,
+  validaAvvisi,
   isoValida,
   EMAIL_REGEX,
-  MESI_PREAVVISO,
+  CAMPI_AVVISO,
+  NOMI_AVVISO,
+  GIORNI_PREAVVISO,
 } from "../../../lib/emissioni";
 
 const fmtIso = (iso) => (iso ? iso.split("-").reverse().join("/") : "—");
@@ -103,8 +107,17 @@ const s = {
 export default function EmissioniClientePage() {
   const { id } = useParams();
   const [cliente, setCliente] = useState(null);
-  const [form, setForm] = useState({ ragione_sociale: "", email: "", telefono: "", data_scadenza: "", data_avviso: "" });
-  const [avvisoToccato, setAvvisoToccato] = useState(false);
+  const [form, setForm] = useState({
+    ragione_sociale: "",
+    email: "",
+    telefono: "",
+    data_scadenza: "",
+    data_avviso_1: "",
+    data_avviso_2: "",
+    data_avviso_3: "",
+  });
+  // Campi avviso modificati a mano nel modulo (gli altri seguono la scadenza)
+  const [toccati, setToccati] = useState({});
   const [msg, setMsg] = useState({ type: "", text: "" });
   const [busy, setBusy] = useState(false);
 
@@ -114,7 +127,10 @@ export default function EmissioniClientePage() {
       email: c.email || "",
       telefono: c.telefono || "",
       data_scadenza: c.data_scadenza || "",
-      data_avviso: c.data_avviso || "", // vuoto = predefinito
+      // vuoto = predefinita (scadenza meno 90 / 60 / 30 giorni)
+      data_avviso_1: c.data_avviso_1 || "",
+      data_avviso_2: c.data_avviso_2 || "",
+      data_avviso_3: c.data_avviso_3 || "",
     };
   }
 
@@ -127,7 +143,7 @@ export default function EmissioniClientePage() {
     }
     setCliente(data);
     setForm(formDa(data));
-    setAvvisoToccato(false);
+    setToccati({});
   }
 
   useEffect(() => {
@@ -138,14 +154,16 @@ export default function EmissioniClientePage() {
     const { name, value } = e.target;
     setForm((f) => {
       const next = { ...f, [name]: value };
-      // Cambiando la scadenza senza toccare la data avviso, questa torna al predefinito
-      // (stessa regola del server). Se la scadenza torna quella salvata, ripristino l'avviso salvato.
-      if (name === "data_scadenza" && !avvisoToccato && cliente) {
-        next.data_avviso = value !== cliente.data_scadenza ? "" : cliente.data_avviso || "";
+      // Cambiando la scadenza, le date avviso non toccate tornano ai predefiniti
+      // (stessa regola del server). Se la scadenza torna quella salvata, ripristino le date salvate.
+      if (name === "data_scadenza" && cliente) {
+        CAMPI_AVVISO.forEach((campo) => {
+          if (!toccati[campo]) next[campo] = value !== cliente.data_scadenza ? "" : cliente[campo] || "";
+        });
       }
       return next;
     });
-    if (name === "data_avviso") setAvvisoToccato(true);
+    if (CAMPI_AVVISO.includes(name)) setToccati((t) => ({ ...t, [name]: true }));
   }
 
   function campiModificati() {
@@ -158,17 +176,24 @@ export default function EmissioniClientePage() {
     if (form.telefono.trim() !== orig.telefono) mod.telefono = form.telefono.trim();
     if (form.data_scadenza !== orig.data_scadenza) mod.data_scadenza = form.data_scadenza;
     // Se la scadenza cambia e c'è una data avviso nel campo, va sempre inviata (altrimenti il server la azzera)
-    if (form.data_avviso !== orig.data_avviso || (mod.data_scadenza && form.data_avviso)) {
-      mod.data_avviso = form.data_avviso || null;
+    for (const campo of CAMPI_AVVISO) {
+      if (form[campo] !== orig[campo] || (mod.data_scadenza && form[campo])) {
+        mod[campo] = form[campo] || null;
+      }
     }
     return mod;
   }
 
+  const avvisiForm = () => CAMPI_AVVISO.map((campo) => form[campo] || null);
+
   function erroreForm() {
     if (!form.ragione_sociale.trim()) return "L'anagrafica cliente è obbligatoria";
     if (!isoValida(form.data_scadenza)) return "Scadenza emissioni non valida";
-    if (form.data_avviso && !isoValida(form.data_avviso)) return "Data avviso non valida";
-    if (form.data_avviso && form.data_avviso > form.data_scadenza) return "La data avviso non può essere dopo la scadenza";
+    for (let i = 0; i < CAMPI_AVVISO.length; i++) {
+      if (form[CAMPI_AVVISO[i]] && !isoValida(form[CAMPI_AVVISO[i]])) return `Data del ${NOMI_AVVISO[i]} non valida`;
+    }
+    const erroreAvvisi = validaAvvisi(form.data_scadenza, avvisiForm());
+    if (erroreAvvisi) return erroreAvvisi;
     if (form.email.trim() && !EMAIL_REGEX.test(form.email.trim())) return "Email non valida";
     return "";
   }
@@ -197,14 +222,25 @@ export default function EmissioniClientePage() {
   }
 
   async function inviaOra() {
-    if (!window.confirm(`Inviare l'avviso scadenza emissioni a ${cliente.ragione_sociale} (${cliente.email})?`)) return;
+    const num = statoEmissione(
+      cliente.data_scadenza,
+      oggiRoma(),
+      avvisiPersonalizzati(cliente),
+      cliente.emissioni_notifiche
+    ).numeroManuale;
+    if (
+      !window.confirm(
+        `Inviare l'avviso scadenza emissioni a ${cliente.ragione_sociale} (${cliente.email})?\n\nVerrà registrato come ${NOMI_AVVISO[num - 1]}.`
+      )
+    )
+      return;
     setBusy(true);
     setMsg({ type: "", text: "" });
     const res = await fetch(`/api/emissioni/${id}/send`, { method: "POST" });
     const data = await res.json().catch(() => ({}));
     setBusy(false);
     if (!res.ok) setMsg({ type: "err", text: data.error || "Invio non riuscito" });
-    else setMsg({ type: "ok", text: data.avviso || "Mail inviata" });
+    else setMsg({ type: "ok", text: data.avviso || `Mail inviata (${NOMI_AVVISO[(data.numero_avviso || 1) - 1]})` });
     load();
   }
 
@@ -220,11 +256,16 @@ export default function EmissioniClientePage() {
   }
 
   const modificato = Object.keys(campiModificati()).length > 0;
-  const formValido = isoValida(form.data_scadenza) && (!form.data_avviso || isoValida(form.data_avviso));
+  const formValido =
+    isoValida(form.data_scadenza) &&
+    CAMPI_AVVISO.every((campo) => !form[campo] || isoValida(form[campo])) &&
+    !validaAvvisi(form.data_scadenza, avvisiForm());
   const oggi = oggiRoma();
-  const stSalvato = statoEmissione(cliente.data_scadenza, oggi, cliente.data_avviso);
-  const stForm = formValido ? statoEmissione(form.data_scadenza, oggi, form.data_avviso || null) : null;
   const storico = cliente.emissioni_notifiche || [];
+  const stSalvato = statoEmissione(cliente.data_scadenza, oggi, avvisiPersonalizzati(cliente), storico);
+  // Anteprima con le modifiche: lo storico vale solo per la scadenza salvata
+  const stForm = formValido ? statoEmissione(form.data_scadenza, oggi, avvisiForm(), storico) : null;
+  const elencoDate = (st) => st.avvisi.map((a) => fmtIso(a.iso)).join(" · ");
 
   return (
     <div style={s.page}>
@@ -257,36 +298,60 @@ export default function EmissioniClientePage() {
                 <label style={s.label}>Scadenza emissioni *</label>
                 <input style={s.input} name="data_scadenza" type="date" value={form.data_scadenza} onChange={handleChange} required />
               </div>
-              <div>
-                <label style={s.label}>Data avviso (facoltativa)</label>
-                <input
-                  style={s.input}
-                  name="data_avviso"
-                  type="date"
-                  value={form.data_avviso}
-                  max={form.data_scadenza || undefined}
-                  onChange={handleChange}
-                />
-                <span style={s.hint}>
-                  {form.data_avviso
-                    ? "Personalizzata. Svuota il campo per tornare al predefinito."
-                    : isoValida(form.data_scadenza)
-                    ? `Vuota = predefinita: ${fmtIso(avvisoPredefinito(form.data_scadenza))} (${MESI_PREAVVISO} mesi prima)`
-                    : `Vuota = ${MESI_PREAVVISO} mesi prima della scadenza`}
-                </span>
-              </div>
+            </div>
+
+            <h3 style={{ fontSize: 14, fontWeight: 600, margin: "8px 0 12px" }}>
+              Avvisi al cliente (facoltativi: se vuoti partono {GIORNI_PREAVVISO.join(", ")} giorni prima della scadenza)
+            </h3>
+            <div style={s.grid}>
+              {CAMPI_AVVISO.map((campo, i) => {
+                const av = stSalvato.avvisi[i];
+                const predef = isoValida(form.data_scadenza) ? avvisoPredefinito(form.data_scadenza, i + 1) : null;
+                return (
+                  <div key={campo}>
+                    <label style={s.label}>{NOMI_AVVISO[i]}</label>
+                    <input
+                      style={s.input}
+                      name={campo}
+                      type="date"
+                      value={form[campo]}
+                      max={form.data_scadenza || undefined}
+                      onChange={handleChange}
+                    />
+                    <span style={s.hint}>
+                      {form[campo]
+                        ? "Personalizzata. Svuota il campo per tornare al predefinito."
+                        : predef
+                        ? `Vuota = predefinita: ${fmtIso(predef)} (${GIORNI_PREAVVISO[i]} giorni prima)`
+                        : `Vuota = ${GIORNI_PREAVVISO[i]} giorni prima della scadenza`}
+                    </span>
+                    <span style={{ ...s.hint, fontWeight: 600 }}>
+                      {av.stato === "inviato"
+                        ? `Inviato il ${fmtDataOra(av.inviato.data_invio_effettiva)}`
+                        : av.stato === "da_inviare"
+                        ? "Da inviare (data raggiunta)"
+                        : av.stato === "saltato"
+                        ? "Saltato (superato da un avviso successivo)"
+                        : av.stato === "non_inviato"
+                        ? "Non inviato (scadenza passata)"
+                        : "In programma"}
+                      {av.stato !== "inviato" && av.fallito ? " · ultimo tentativo fallito" : ""}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
 
             <div style={s.stato}>
               <div>
                 <div style={s.statoLabel}>Stato salvato</div>
-                {stSalvato.scaduta ? `scaduta da ${-stSalvato.giorni} gg` : `scade tra ${stSalvato.giorni} gg`} · avviso dal {fmtIso(stSalvato.avvisoIso)}
+                {stSalvato.scaduta ? `scaduta da ${-stSalvato.giorni} gg` : `scade tra ${stSalvato.giorni} gg`} · avvisi: {elencoDate(stSalvato)}
               </div>
               {modificato && stForm && (
                 <div>
                   <div style={s.statoLabel}>Con le modifiche</div>
                   <strong>
-                    {stForm.scaduta ? `scaduta da ${-stForm.giorni} gg` : `scade tra ${stForm.giorni} gg`} · avviso dal {fmtIso(stForm.avvisoIso)}
+                    {stForm.scaduta ? `scaduta da ${-stForm.giorni} gg` : `scade tra ${stForm.giorni} gg`} · avvisi: {elencoDate(stForm)}
                   </strong>
                 </div>
               )}
@@ -303,7 +368,7 @@ export default function EmissioniClientePage() {
                   disabled={busy}
                   onClick={() => {
                     setForm(formDa(cliente));
-                    setAvvisoToccato(false);
+                    setToccati({});
                   }}
                 >
                   Annulla modifiche
@@ -323,6 +388,9 @@ export default function EmissioniClientePage() {
             >
               Invia mail ora
             </button>
+            {cliente.email && !modificato && (
+              <span style={s.hint}>Verrà registrata come {NOMI_AVVISO[stSalvato.numeroManuale - 1]}</span>
+            )}
             {!cliente.email && <span style={s.hint}>Manca l&apos;email del cliente</span>}
             {modificato && <span style={s.hint}>Salva prima le modifiche: l&apos;avviso usa i dati salvati</span>}
           </div>
@@ -334,6 +402,7 @@ export default function EmissioniClientePage() {
             <thead>
               <tr>
                 <th style={s.th}>Data e ora</th>
+                <th style={s.th}>Avviso</th>
                 <th style={s.th}>Tipo</th>
                 <th style={s.th}>Stato</th>
                 <th style={s.th}>Scadenza di riferimento</th>
@@ -343,6 +412,7 @@ export default function EmissioniClientePage() {
               {storico.map((n) => (
                 <tr key={n.id}>
                   <td style={s.td}>{n.data_invio_effettiva ? fmtDataOra(n.data_invio_effettiva) : "—"}</td>
+                  <td style={s.td}>{n.numero_avviso ? NOMI_AVVISO[n.numero_avviso - 1] : "—"}</td>
                   <td style={s.td}>{n.tipo_invio === "manuale" ? "manuale" : "automatico"}</td>
                   <td style={s.td}>
                     {n.status === "sent" ? "inviato" : n.status === "failed" ? "fallito" : n.status}

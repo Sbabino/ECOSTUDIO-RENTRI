@@ -1,5 +1,11 @@
 import { getSupabase, leggiTutti } from "../../../../lib/supabase";
 import { leggiExcelEmissioni } from "../../../../lib/emissioni-xlsx";
+import {
+  CAMPI_AVVISO,
+  avvisiPersonalizzati,
+  unisciAvvisi,
+  validaAvvisi,
+} from "../../../../lib/emissioni";
 
 export const dynamic = "force-dynamic";
 
@@ -42,7 +48,7 @@ export async function POST(request) {
     esistenti = await leggiTutti((da, a) =>
       supabase
         .from("emissioni_clienti")
-        .select("id, ragione_sociale, email, telefono, data_scadenza, data_avviso")
+        .select("id, ragione_sociale, email, telefono, data_scadenza, data_avviso_1, data_avviso_2, data_avviso_3")
         .order("id", { ascending: true })
         .range(da, a)
     );
@@ -52,6 +58,7 @@ export async function POST(request) {
 
   const perNome = new Map(esistenti.map((c) => [c.ragione_sociale.trim().toLowerCase(), c]));
 
+  const erroriDb = [];
   const nuovi = [];
   const daAggiornare = [];
   let invariati = 0;
@@ -67,13 +74,24 @@ export async function POST(request) {
     const upd = {};
     const scadenzaCambiata = ex.data_scadenza !== r.data_scadenza;
     if (scadenzaCambiata) upd.data_scadenza = r.data_scadenza;
-    // Data avviso: se indicata nel file vince; se vuota resta quella esistente,
-    // tranne quando la scadenza cambia (la vecchia data avviso non vale più: si torna al predefinito)
-    if (r.data_avviso) {
-      if (r.data_avviso !== ex.data_avviso) upd.data_avviso = r.data_avviso;
-    } else if (scadenzaCambiata && ex.data_avviso) {
-      upd.data_avviso = null;
+    // Date avviso: quelle indicate nel file vincono; quelle vuote restano come sono salvate,
+    // tranne quando la scadenza cambia (le vecchie date non valgono più: si torna ai predefiniti)
+    const indicate = r.avvisi_file.map((v, i) => (v ? r.avvisi[i] : undefined));
+    const esistenti = avvisiPersonalizzati(ex);
+    const finali = unisciAvvisi(esistenti, indicate, scadenzaCambiata);
+    const erroreAvvisi = validaAvvisi(r.data_scadenza, finali);
+    if (erroreAvvisi) {
+      erroriDb.push({
+        riga: r.riga,
+        cliente: r.ragione_sociale,
+        messaggio:
+          erroreAvvisi + " - incompatibile con le date avviso già salvate per questo cliente: indicare tutte e tre le date nel file",
+      });
+      continue;
     }
+    CAMPI_AVVISO.forEach((campo, i) => {
+      if (finali[i] !== esistenti[i]) upd[campo] = finali[i];
+    });
     // Email e telefono: il file li sovrascrive solo se compilati
     if (r.email && r.email !== ex.email) upd.email = r.email;
     if (r.telefono && r.telefono !== ex.telefono) upd.telefono = r.telefono;
@@ -83,7 +101,6 @@ export async function POST(request) {
     else invariati++;
   }
 
-  const erroriDb = [];
   let creati = 0;
   let aggiornati = 0;
 
@@ -95,7 +112,7 @@ export async function POST(request) {
       email: r.email,
       telefono: r.telefono,
       data_scadenza: r.data_scadenza,
-      data_avviso: r.data_avviso,
+      ...Object.fromEntries(CAMPI_AVVISO.map((campo, i) => [campo, r.avvisi[i]])),
     });
 
     const { error } = await supabase.from("emissioni_clienti").insert(blocco.map(toRow));
