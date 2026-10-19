@@ -1,4 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
+import { EMAIL_REGEX, isoValida } from "../../../../lib/emissioni";
+
+const BUCKET = "rentri-documents";
 
 function getSupabase() {
   return createClient(
@@ -26,11 +29,104 @@ export async function GET(request, { params }) {
   return Response.json(data);
 }
 
-// Modifica frequenza e/o spunta "Caricamento su RENTRI ESEGUITO"
+// Elimina il cliente con storico invii e documenti caricati
+export async function DELETE(request, { params }) {
+  const { id } = await params;
+  if (!/^\d+$/.test(id)) {
+    return Response.json({ error: "Id non valido" }, { status: 400 });
+  }
+
+  const supabase = getSupabase();
+
+  const { data: client, error: readErr } = await supabase
+    .from("clients")
+    .select("id")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (readErr) {
+    return Response.json({ error: readErr.message }, { status: 500 });
+  }
+  if (!client) {
+    return Response.json({ error: "Cliente non trovato" }, { status: 404 });
+  }
+
+  let { error: delErr } = await supabase.from("clients").delete().eq("id", id);
+
+  // 23503 = chiave esterna: nel DB lo storico invii non si cancella a cascata.
+  // Elimino prima lo storico e riprovo (così, se la prima cancellazione fallisce per altro, lo storico non si perde).
+  if (delErr && delErr.code === "23503") {
+    const { error: nErr } = await supabase.from("notifications").delete().eq("client_id", id);
+    if (nErr) {
+      return Response.json({ error: nErr.message }, { status: 500 });
+    }
+    ({ error: delErr } = await supabase.from("clients").delete().eq("id", id));
+  }
+
+  if (delErr) {
+    return Response.json({ error: delErr.message }, { status: 500 });
+  }
+
+  // Pulizia documenti: ogni upload crea un file nuovo, li rimuovo tutti.
+  // Se fallisce il cliente è comunque già eliminato: lo segnalo senza bloccare.
+  let documentiRimossi = true;
+  try {
+    const cartella = `clients/${id}`;
+    const { data: files } = await supabase.storage.from(BUCKET).list(cartella, { limit: 1000 });
+    if (files && files.length > 0) {
+      const { error: rmErr } = await supabase.storage
+        .from(BUCKET)
+        .remove(files.map((f) => `${cartella}/${f.name}`));
+      if (rmErr) documentiRimossi = false;
+    }
+  } catch {
+    documentiRimossi = false;
+  }
+
+  return Response.json({ ok: true, documentiRimossi });
+}
+
+// Modifica anagrafica (nome, email, telefono, data primo carico, periodicità)
+// e/o spunta "Caricamento su RENTRI ESEGUITO". Si inviano solo i campi da cambiare.
 export async function PATCH(request, { params }) {
   const { id } = await params;
-  const body = await request.json();
+  if (!/^\d+$/.test(id)) {
+    return Response.json({ error: "Id non valido" }, { status: 400 });
+  }
+  const body = await request.json().catch(() => ({}));
   const update = { updated_at: new Date().toISOString() };
+
+  if ("ragione_sociale" in body) {
+    const nome = String(body.ragione_sociale || "").replace(/\s+/g, " ").trim();
+    if (!nome || nome.length > 255) {
+      return Response.json({ error: "Denominazione sociale non valida" }, { status: 400 });
+    }
+    update.ragione_sociale = nome;
+  }
+
+  if ("email" in body) {
+    const email = String(body.email || "").trim();
+    // In RENTRI l'email è obbligatoria (serve all'avviso)
+    if (!email || !EMAIL_REGEX.test(email) || email.length > 255) {
+      return Response.json({ error: "Email non valida" }, { status: 400 });
+    }
+    update.email = email;
+  }
+
+  if ("telefono" in body) {
+    const tel = String(body.telefono || "").trim();
+    if (tel.length > 30) {
+      return Response.json({ error: "Telefono troppo lungo (max 30 caratteri)" }, { status: 400 });
+    }
+    update.telefono = tel || null;
+  }
+
+  if ("data_primo_carico" in body) {
+    if (!isoValida(body.data_primo_carico)) {
+      return Response.json({ error: "Data primo carico non valida" }, { status: 400 });
+    }
+    update.data_primo_carico = body.data_primo_carico;
+  }
 
   if ("frequenza_giorni" in body) {
     const freq = Number(body.frequenza_giorni);
@@ -59,10 +155,16 @@ export async function PATCH(request, { params }) {
     .update(update)
     .eq("id", id)
     .select()
-    .single();
+    .maybeSingle();
 
   if (error) {
+    if (error.code === "23505") {
+      return Response.json({ error: "Esiste già un cliente con questi dati" }, { status: 409 });
+    }
     return Response.json({ error: error.message }, { status: 500 });
+  }
+  if (!data) {
+    return Response.json({ error: "Cliente non trovato" }, { status: 404 });
   }
   return Response.json(data);
 }

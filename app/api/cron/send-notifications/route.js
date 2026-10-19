@@ -1,9 +1,14 @@
 import { createClient } from "@supabase/supabase-js";
 import { inviaAvviso } from "../../../../lib/mail";
 import { prossimaScadenza, oggiRoma, toIso } from "../../../../lib/scadenze";
+import { processaEmissioni } from "../../../../lib/cron-emissioni";
 
 export async function GET(request) {
-  if (request.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`) {
+  // Senza CRON_SECRET configurato la route resta chiusa (evita "Bearer undefined")
+  if (
+    !process.env.CRON_SECRET ||
+    request.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`
+  ) {
     return Response.json({ error: "Non autorizzato" }, { status: 401 });
   }
 
@@ -50,5 +55,13 @@ export async function GET(request) {
     (r.ok ? inviati : falliti).push(c.id);
   }
 
-  return Response.json({ oggi: toIso(oggi), inviati, saltati, falliti });
+  // Scadenziario emissioni: isolato, un suo errore non deve mai bloccare il cron RENTRI
+  let emissioni;
+  try {
+    emissioni = await processaEmissioni(supabase, oggi);
+  } catch (err) {
+    emissioni = { errore: err.message };
+  }
+
+  return Response.json({ oggi: toIso(oggi), inviati, saltati, falliti, emissioni });
 }

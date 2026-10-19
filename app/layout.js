@@ -1,5 +1,5 @@
 export const metadata = {
-  title: "Portale RENTRI",
+  title: "RENTRI ED EMISSIONI",
 };
 
 export default function RootLayout({ children }) {

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { prossimaScadenza } from "../../../lib/scadenze";
+import { isoValida } from "../../../lib/emissioni";
 
 const s = {
   page: {
@@ -51,6 +52,31 @@ const s = {
     fontSize: 14,
     cursor: "pointer",
   },
+  formGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gap: 14,
+    marginBottom: 16,
+  },
+  fieldLabel: { fontSize: 13, fontWeight: 600, color: "#334155", marginBottom: 6, display: "block" },
+  inputFull: {
+    width: "100%",
+    padding: "10px 12px",
+    borderRadius: 8,
+    border: "1px solid #cbd5e1",
+    fontSize: 14,
+    boxSizing: "border-box",
+  },
+  btnGhost: {
+    padding: "8px 16px",
+    borderRadius: 8,
+    border: "1px solid #94a3b8",
+    background: "#fff",
+    color: "#334155",
+    fontWeight: 600,
+    fontSize: 14,
+    cursor: "pointer",
+  },
   msgErr: { background: "#fef2f2", color: "#b91c1c", padding: "10px 14px", borderRadius: 8, marginBottom: 16, fontSize: 14 },
   msgOk: { background: "#ecfdf5", color: "#065f46", padding: "10px 14px", borderRadius: 8, marginBottom: 16, fontSize: 14 },
   table: { width: "100%", borderCollapse: "collapse", fontSize: 14 },
@@ -72,7 +98,13 @@ const fmtIso = (iso) => (iso ? iso.split("-").reverse().join("/") : "—");
 export default function ClientPage() {
   const { id } = useParams();
   const [client, setClient] = useState(null);
-  const [freq, setFreq] = useState(30);
+  const [form, setForm] = useState({
+    ragione_sociale: "",
+    email: "",
+    telefono: "",
+    data_primo_carico: "",
+    frequenza_giorni: 30,
+  });
   const [msg, setMsg] = useState({ type: "", text: "" });
   const [busy, setBusy] = useState(false);
 
@@ -84,25 +116,53 @@ export default function ClientPage() {
       return;
     }
     setClient(data);
-    setFreq(data.frequenza_giorni);
+    setForm({
+      ragione_sociale: data.ragione_sociale || "",
+      email: data.email || "",
+      telefono: data.telefono || "",
+      data_primo_carico: data.data_primo_carico || "",
+      frequenza_giorni: data.frequenza_giorni,
+    });
+  }
+
+  function handleChange(e) {
+    setForm({ ...form, [e.target.name]: e.target.value });
   }
 
   useEffect(() => {
     load();
   }, [id]);
 
-  async function salvaFrequenza() {
+  // Invia solo i campi cambiati rispetto a quelli salvati
+  function campiModificati() {
+    if (!client) return {};
+    const mod = {};
+    const nome = form.ragione_sociale.replace(/\s+/g, " ").trim();
+    if (nome !== (client.ragione_sociale || "")) mod.ragione_sociale = nome;
+    if (form.email.trim() !== (client.email || "")) mod.email = form.email.trim();
+    if (form.telefono.trim() !== (client.telefono || "")) mod.telefono = form.telefono.trim();
+    if (form.data_primo_carico !== (client.data_primo_carico || "")) mod.data_primo_carico = form.data_primo_carico;
+    if (Number(form.frequenza_giorni) !== client.frequenza_giorni) mod.frequenza_giorni = Number(form.frequenza_giorni);
+    return mod;
+  }
+
+  async function salvaAnagrafica(e) {
+    e.preventDefault();
+    const mod = campiModificati();
+    if (Object.keys(mod).length === 0) {
+      return setMsg({ type: "ok", text: "Nessuna modifica da salvare" });
+    }
     setBusy(true);
     setMsg({ type: "", text: "" });
     const res = await fetch(`/api/clients/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ frequenza_giorni: Number(freq) }),
+      body: JSON.stringify(mod),
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     setBusy(false);
-    if (!res.ok) return setMsg({ type: "err", text: data.error });
-    setMsg({ type: "ok", text: "Frequenza aggiornata" });
+    if (!res.ok) return setMsg({ type: "err", text: data.error || "Salvataggio non riuscito" });
+    setMsg({ type: "ok", text: "Anagrafica aggiornata" });
     load();
   }
 
@@ -143,7 +203,12 @@ export default function ClientPage() {
     );
   }
 
+  // Anteprima della prossima scadenza con i valori che stai scrivendo (prima di salvare)
+  const freqNum = Number(form.frequenza_giorni);
+  const formValido = isoValida(form.data_primo_carico) && Number.isInteger(freqNum) && freqNum >= 1 && freqNum <= 365;
   const prox = prossimaScadenza(client.data_primo_carico, client.frequenza_giorni);
+  const proxForm = formValido ? prossimaScadenza(form.data_primo_carico, freqNum) : null;
+  const modificato = Object.keys(campiModificati()).length > 0;
   const storico = client.notifications || [];
 
   return (
@@ -158,26 +223,77 @@ export default function ClientPage() {
         {msg.text && <div style={msg.type === "err" ? s.msgErr : s.msgOk}>{msg.text}</div>}
 
         <section style={s.card}>
-          <h2 style={s.cardTitle}>Dati e scadenza</h2>
-          <div style={s.row}>
-            <div><div style={s.label}>Email</div>{client.email}</div>
-            <div><div style={s.label}>Telefono</div>{client.telefono || "—"}</div>
-            <div><div style={s.label}>Primo carico</div>{fmtIso(client.data_primo_carico)}</div>
-            <div><div style={s.label}>Prossima scadenza</div>{fmtData(prox.ms)} ({prox.giorni} gg)</div>
-          </div>
+          <h2 style={s.cardTitle}>Anagrafica e scadenza</h2>
+          <form onSubmit={salvaAnagrafica}>
+            <div style={s.formGrid}>
+              <div>
+                <label style={s.fieldLabel}>Denominazione sociale *</label>
+                <input style={s.inputFull} name="ragione_sociale" value={form.ragione_sociale} onChange={handleChange} required />
+              </div>
+              <div>
+                <label style={s.fieldLabel}>Email *</label>
+                <input style={s.inputFull} name="email" type="email" value={form.email} onChange={handleChange} required />
+              </div>
+              <div>
+                <label style={s.fieldLabel}>Telefono</label>
+                <input style={s.inputFull} name="telefono" value={form.telefono} onChange={handleChange} />
+              </div>
+              <div>
+                <label style={s.fieldLabel}>Data primo carico rifiuti *</label>
+                <input style={s.inputFull} name="data_primo_carico" type="date" value={form.data_primo_carico} onChange={handleChange} required />
+              </div>
+              <div>
+                <label style={s.fieldLabel}>Ogni quanti giorni *</label>
+                <input
+                  style={s.inputFull}
+                  name="frequenza_giorni"
+                  type="number"
+                  min={1}
+                  max={365}
+                  value={form.frequenza_giorni}
+                  onChange={handleChange}
+                  required
+                />
+              </div>
+            </div>
 
-          <div style={s.actions}>
-            <label style={s.label}>Ogni quanti giorni</label>
-            <input
-              style={s.input}
-              type="number"
-              min={1}
-              max={365}
-              value={freq}
-              onChange={(e) => setFreq(e.target.value)}
-            />
-            <button style={s.btn} onClick={salvaFrequenza} disabled={busy}>Salva frequenza</button>
-          </div>
+            <div style={s.row}>
+              <div>
+                <div style={s.label}>Prossima scadenza (salvata)</div>
+                {fmtData(prox.ms)} ({prox.giorni} gg)
+              </div>
+              {modificato && proxForm && (
+                <div>
+                  <div style={s.label}>Con le modifiche</div>
+                  <strong>{fmtData(proxForm.ms)} ({proxForm.giorni} gg)</strong>
+                </div>
+              )}
+            </div>
+
+            <div style={s.actions}>
+              <button type="submit" style={{ ...s.btn, opacity: busy || !modificato ? 0.5 : 1 }} disabled={busy || !modificato}>
+                {busy ? "Salvataggio..." : "Salva modifiche"}
+              </button>
+              {modificato && (
+                <button
+                  type="button"
+                  style={s.btnGhost}
+                  onClick={() =>
+                    setForm({
+                      ragione_sociale: client.ragione_sociale || "",
+                      email: client.email || "",
+                      telefono: client.telefono || "",
+                      data_primo_carico: client.data_primo_carico || "",
+                      frequenza_giorni: client.frequenza_giorni,
+                    })
+                  }
+                  disabled={busy}
+                >
+                  Annulla modifiche
+                </button>
+              )}
+            </div>
+          </form>
         </section>
 
         <section style={s.card}>
