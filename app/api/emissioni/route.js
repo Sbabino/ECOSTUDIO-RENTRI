@@ -32,6 +32,8 @@ export async function POST(request) {
   const email = (body.email || "").trim();
   const telefono = (body.telefono || "").trim();
   const data_scadenza = body.data_scadenza;
+  // Facoltativa: se vuota vale il predefinito (3 mesi prima della scadenza)
+  const data_avviso = body.data_avviso ? String(body.data_avviso) : null;
 
   if (!ragione_sociale || !data_scadenza) {
     return Response.json({ error: "Anagrafica cliente e scadenza sono obbligatorie" }, { status: 400 });
@@ -41,6 +43,12 @@ export async function POST(request) {
   }
   if (!isoValida(data_scadenza)) {
     return Response.json({ error: "Data di scadenza non valida" }, { status: 400 });
+  }
+  if (data_avviso && !isoValida(data_avviso)) {
+    return Response.json({ error: "Data avviso non valida" }, { status: 400 });
+  }
+  if (data_avviso && data_avviso > data_scadenza) {
+    return Response.json({ error: "La data avviso non può essere dopo la scadenza" }, { status: 400 });
   }
   if (email && (!EMAIL_REGEX.test(email) || email.length > 255)) {
     return Response.json({ error: "Email non valida" }, { status: 400 });
@@ -56,6 +64,7 @@ export async function POST(request) {
       email: email || null,
       telefono: telefono || null,
       data_scadenza,
+      data_avviso,
     })
     .select()
     .single();

@@ -42,7 +42,7 @@ export async function POST(request) {
     esistenti = await leggiTutti((da, a) =>
       supabase
         .from("emissioni_clienti")
-        .select("id, ragione_sociale, email, telefono, data_scadenza")
+        .select("id, ragione_sociale, email, telefono, data_scadenza, data_avviso")
         .order("id", { ascending: true })
         .range(da, a)
     );
@@ -65,7 +65,15 @@ export async function POST(request) {
       continue;
     }
     const upd = {};
-    if (ex.data_scadenza !== r.data_scadenza) upd.data_scadenza = r.data_scadenza;
+    const scadenzaCambiata = ex.data_scadenza !== r.data_scadenza;
+    if (scadenzaCambiata) upd.data_scadenza = r.data_scadenza;
+    // Data avviso: se indicata nel file vince; se vuota resta quella esistente,
+    // tranne quando la scadenza cambia (la vecchia data avviso non vale più: si torna al predefinito)
+    if (r.data_avviso) {
+      if (r.data_avviso !== ex.data_avviso) upd.data_avviso = r.data_avviso;
+    } else if (scadenzaCambiata && ex.data_avviso) {
+      upd.data_avviso = null;
+    }
     // Email e telefono: il file li sovrascrive solo se compilati
     if (r.email && r.email !== ex.email) upd.email = r.email;
     if (r.telefono && r.telefono !== ex.telefono) upd.telefono = r.telefono;
@@ -87,6 +95,7 @@ export async function POST(request) {
       email: r.email,
       telefono: r.telefono,
       data_scadenza: r.data_scadenza,
+      data_avviso: r.data_avviso,
     });
 
     const { error } = await supabase.from("emissioni_clienti").insert(blocco.map(toRow));

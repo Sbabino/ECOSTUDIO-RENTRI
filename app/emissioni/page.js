@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import SiteHeader from "../components/SiteHeader";
 import { oggiRoma } from "../../lib/scadenze";
-import { statoEmissione, MESI_PREAVVISO } from "../../lib/emissioni";
+import { statoEmissione, avvisoPredefinito, MESI_PREAVVISO } from "../../lib/emissioni";
 
-const emptyForm = { ragione_sociale: "", data_scadenza: "", email: "", telefono: "" };
+const emptyForm = { ragione_sociale: "", data_scadenza: "", data_avviso: "", email: "", telefono: "" };
 
 const fmtIso = (iso) => (iso ? iso.split("-").reverse().join("/") : "—");
 const fmtDataOra = (ts) =>
@@ -144,6 +145,16 @@ const s = {
     fontWeight: 600,
     cursor: "pointer",
   },
+  btnLink: {
+    background: "none",
+    border: "none",
+    padding: "0 4px",
+    color: "#0f766e",
+    fontSize: 12,
+    fontWeight: 600,
+    textDecoration: "underline",
+    cursor: "pointer",
+  },
   btnSave: {
     padding: "5px 10px",
     borderRadius: 6,
@@ -204,6 +215,7 @@ const s = {
   small: { fontSize: 12, color: "#64748b" },
   smallRed: { fontSize: 12, color: "#dc2626", fontWeight: 600 },
   link: { color: "#0f766e", fontWeight: 600, fontSize: 14 },
+  nameLink: { color: "#0f766e", fontWeight: 600, textDecoration: "none" },
   empty: { textAlign: "center", color: "#94a3b8", padding: 24 },
   importRow: { display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" },
   list: { margin: "8px 0 0", paddingLeft: 20, fontSize: 13, lineHeight: 1.6 },
@@ -218,7 +230,8 @@ export default function EmissioniPage() {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [bozze, setBozze] = useState({}); // id -> data scadenza modificata, non ancora salvata
+  // id -> { data_scadenza?, data_avviso? } modifiche non ancora salvate
+  const [bozze, setBozze] = useState({});
   const [savingId, setSavingId] = useState(null);
   const [sendingId, setSendingId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
@@ -296,16 +309,50 @@ export default function EmissioniPage() {
     if (fileRef.current) fileRef.current.value = "";
   }
 
-  async function salvaScadenza(c) {
-    const nuova = bozze[c.id];
-    if (!nuova) return;
+  function modificaBozza(id, campo, valore) {
+    setBozze((b) => ({ ...b, [id]: { ...b[id], [campo]: valore } }));
+  }
+
+  function scartaBozza(id) {
+    setBozze((b) => {
+      const { [id]: _tolto, ...resto } = b;
+      return resto;
+    });
+  }
+
+  // Salva le modifiche della riga (scadenza e/o data avviso). `forzaAvviso` = null per tornare al predefinito.
+  async function salvaRiga(c, forzaAvviso) {
+    const bz = bozze[c.id] || {};
+    const body = {};
+    const scadAttuale = c.data_scadenza;
+    const avvisoMostrato = c.data_avviso || avvisoPredefinito(c.data_scadenza);
+
+    if (bz.data_scadenza && bz.data_scadenza !== scadAttuale) body.data_scadenza = bz.data_scadenza;
+    if (forzaAvviso === null) body.data_avviso = null;
+    else if (bz.data_avviso && (bz.data_avviso !== avvisoMostrato || body.data_scadenza)) {
+      // Se cambia anche la scadenza, la data avviso digitata va sempre inviata (altrimenti il server la azzera)
+      body.data_avviso = bz.data_avviso;
+    }
+
+    if (Object.keys(body).length === 0) {
+      scartaBozza(c.id);
+      return;
+    }
+
+    // Controllo subito, il server lo ripete: l'avviso non può partire dopo la scadenza
+    const scadFinale = body.data_scadenza || scadAttuale;
+    if (body.data_avviso && body.data_avviso > scadFinale) {
+      setError("La data avviso non può essere dopo la scadenza emissioni");
+      return;
+    }
+
     setError("");
     setInfo("");
     setSavingId(c.id);
     const res = await fetch(`/api/emissioni/${c.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data_scadenza: nuova }),
+      body: JSON.stringify(body),
     });
     const data = await leggiRisposta(res);
     setSavingId(null);
@@ -313,10 +360,12 @@ export default function EmissioniPage() {
       setError(data.error || "Salvataggio non riuscito");
       return;
     }
-    setBozze((b) => {
-      const { [c.id]: _tolto, ...resto } = b;
-      return resto;
-    });
+    if (body.data_scadenza && !("data_avviso" in body) && c.data_avviso) {
+      setInfo(
+        `Scadenza aggiornata. La data avviso di ${c.ragione_sociale} è tornata a ${MESI_PREAVVISO} mesi prima della nuova scadenza.`
+      );
+    }
+    scartaBozza(c.id);
     loadClienti();
   }
 
@@ -356,7 +405,7 @@ export default function EmissioniPage() {
   const righe = clienti
     .map((c) => ({
       ...c,
-      st: statoEmissione(c.data_scadenza, oggi),
+      st: statoEmissione(c.data_scadenza, oggi, c.data_avviso),
       inviato: avvisoInviatoDi(c),
       fallito: haTentativoFallito(c),
     }))
@@ -371,7 +420,8 @@ export default function EmissioniPage() {
       )
     : righe;
 
-  const inFinestra = righe.filter((r) => r.st.inFinestra).length;
+  // Data avviso raggiunta, scadenza non passata e avviso non ancora inviato
+  const inFinestra = righe.filter((r) => r.st.inFinestra && !r.inviato).length;
   const scadute = righe.filter((r) => r.st.scaduta).length;
   const senzaEmail = righe.filter((r) => !r.email).length;
 
@@ -389,7 +439,7 @@ export default function EmissioniPage() {
             <p style={s.statValue}>{clienti.length}</p>
           </div>
           <div style={s.statCard}>
-            <p style={s.statLabel}>Nella finestra di avviso ({MESI_PREAVVISO} mesi)</p>
+            <p style={s.statLabel}>Avvisi da inviare (data avviso raggiunta)</p>
             <p style={{ ...s.statValue, color: inFinestra > 0 ? "#d97706" : "#0f172a" }}>{inFinestra}</p>
           </div>
           <div style={s.statCard}>
@@ -417,6 +467,7 @@ export default function EmissioniPage() {
           <h2 style={s.cardTitle}>Importa anagrafica da Excel</h2>
           <p style={s.hint}>
             Colonne del template: <strong>ANAGRAFICA CLIENTE</strong>, <strong>SCADENZA EMISSIONI</strong> (GG/MM/AAAA),
+            <strong> DATA AVVISO</strong> (facoltativa: se vuota l&apos;avviso parte {MESI_PREAVVISO} mesi prima della scadenza),
             più <strong>EMAIL</strong> e TELEFONO. L&apos;email serve per l&apos;avviso automatico: senza email il cliente
             viene caricato ma non riceve avvisi. Se il cliente esiste già (stesso nome) viene aggiornato; i clienti
             non presenti nel file non vengono toccati.
@@ -493,6 +544,18 @@ export default function EmissioniPage() {
                 <input style={s.input} name="data_scadenza" type="date" value={form.data_scadenza} onChange={handleChange} required />
               </div>
               <div>
+                <label style={s.label}>Data avviso (facoltativa)</label>
+                <input
+                  style={s.input}
+                  name="data_avviso"
+                  type="date"
+                  value={form.data_avviso}
+                  max={form.data_scadenza || undefined}
+                  onChange={handleChange}
+                />
+                <span style={s.small}>Se vuota: {MESI_PREAVVISO} mesi prima della scadenza</span>
+              </div>
+              <div>
                 <label style={s.label}>Email (per l&apos;avviso)</label>
                 <input style={s.input} name="email" type="email" value={form.email} onChange={handleChange} />
               </div>
@@ -525,18 +588,28 @@ export default function EmissioniPage() {
                   <th style={s.th}>Cliente</th>
                   <th style={s.th}>Contatti</th>
                   <th style={s.th}>Scadenza emissioni</th>
-                  <th style={s.th}>Giorni</th>
-                  <th style={s.th}>Avviso ({MESI_PREAVVISO} mesi prima)</th>
+                  <th style={s.th}>Data avviso</th>
+                  <th style={s.th}>Stato avviso</th>
                   <th style={s.th}>Azioni</th>
                 </tr>
               </thead>
               <tbody>
                 {righeFiltrate.map((r) => {
-                  const bozza = bozze[r.id];
-                  const modificata = bozza && bozza !== r.data_scadenza;
+                  const bz = bozze[r.id] || {};
+                  const scadCambiata = !!bz.data_scadenza && bz.data_scadenza !== r.data_scadenza;
+                  // Se cambia la scadenza senza toccare l'avviso, il server riporta l'avviso al predefinito:
+                  // lo mostro già nell'anteprima
+                  const avvisoMostrato =
+                    bz.data_avviso ?? (scadCambiata ? avvisoPredefinito(bz.data_scadenza) : r.st.avvisoIso);
+                  const avvisoCambiato = !!bz.data_avviso && bz.data_avviso !== r.st.avvisoIso;
+                  const modificata = scadCambiata || avvisoCambiato;
                   return (
                     <tr key={r.id}>
-                      <td style={{ ...s.td, fontWeight: 600 }}>{r.ragione_sociale}</td>
+                      <td style={s.td}>
+                        <Link href={`/emissioni/${r.id}`} style={s.nameLink} title="Apri e modifica l'anagrafica">
+                          {r.ragione_sociale}
+                        </Link>
+                      </td>
                       <td style={s.td}>
                         {r.email ? r.email : <span style={s.smallRed}>email mancante</span>}
                         {r.telefono && (
@@ -550,19 +623,51 @@ export default function EmissioniPage() {
                         <input
                           type="date"
                           style={s.dateInput}
-                          value={bozza ?? r.data_scadenza}
-                          onChange={(e) => setBozze({ ...bozze, [r.id]: e.target.value })}
+                          value={bz.data_scadenza ?? r.data_scadenza}
+                          onChange={(e) => modificaBozza(r.id, "data_scadenza", e.target.value)}
                         />
-                        {modificata && (
-                          <button style={s.btnSave} onClick={() => salvaScadenza(r)} disabled={savingId === r.id}>
-                            {savingId === r.id ? "..." : "Salva"}
-                          </button>
-                        )}
+                        <div style={{ marginTop: 6 }}>
+                          <span style={s.badge(coloreStato(r.st))}>
+                            {r.st.scaduta ? `scaduta da ${-r.st.giorni} gg` : `${r.st.giorni} gg`}
+                          </span>
+                        </div>
                       </td>
                       <td style={s.td}>
-                        <span style={s.badge(coloreStato(r.st))}>
-                          {r.st.scaduta ? `scaduta da ${-r.st.giorni} gg` : `${r.st.giorni} gg`}
-                        </span>
+                        <input
+                          type="date"
+                          style={s.dateInput}
+                          value={avvisoMostrato}
+                          max={bz.data_scadenza ?? r.data_scadenza}
+                          onChange={(e) => modificaBozza(r.id, "data_avviso", e.target.value)}
+                        />
+                        <div style={{ marginTop: 6 }}>
+                          <span style={s.small}>
+                            {r.st.avvisoPersonalizzato ? "personalizzata" : `predefinita (${MESI_PREAVVISO} mesi prima)`}
+                          </span>
+                          {r.st.avvisoPersonalizzato && (
+                            <>
+                              {" "}
+                              <button
+                                style={s.btnLink}
+                                onClick={() => salvaRiga(r, null)}
+                                disabled={savingId === r.id}
+                                title={`Riporta la data avviso a ${MESI_PREAVVISO} mesi prima della scadenza`}
+                              >
+                                ripristina
+                              </button>
+                            </>
+                          )}
+                        </div>
+                        {modificata && (
+                          <div style={{ marginTop: 6 }}>
+                            <button style={s.btnSave} onClick={() => salvaRiga(r)} disabled={savingId === r.id}>
+                              {savingId === r.id ? "..." : "Salva"}
+                            </button>
+                            <button style={s.btnLink} onClick={() => scartaBozza(r.id)} disabled={savingId === r.id}>
+                              annulla
+                            </button>
+                          </div>
+                        )}
                       </td>
                       <td style={s.td}>
                         {r.inviato ? (
