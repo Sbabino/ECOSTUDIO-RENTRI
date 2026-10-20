@@ -111,6 +111,7 @@ export default function EmissioniClientePage() {
     ragione_sociale: "",
     email: "",
     telefono: "",
+    tipo_autorizzazione: "",
     data_scadenza: "",
     data_avviso_1: "",
     data_avviso_2: "",
@@ -126,6 +127,7 @@ export default function EmissioniClientePage() {
       ragione_sociale: c.ragione_sociale || "",
       email: c.email || "",
       telefono: c.telefono || "",
+      tipo_autorizzazione: c.tipo_autorizzazione || "",
       data_scadenza: c.data_scadenza || "",
       // vuoto = predefinita (scadenza meno 90 / 60 / 30 giorni)
       data_avviso_1: c.data_avviso_1 || "",
@@ -174,6 +176,7 @@ export default function EmissioniClientePage() {
     if (nome !== orig.ragione_sociale) mod.ragione_sociale = nome;
     if (form.email.trim() !== orig.email) mod.email = form.email.trim();
     if (form.telefono.trim() !== orig.telefono) mod.telefono = form.telefono.trim();
+    if (form.tipo_autorizzazione.trim() !== orig.tipo_autorizzazione) mod.tipo_autorizzazione = form.tipo_autorizzazione.trim();
     if (form.data_scadenza !== orig.data_scadenza) mod.data_scadenza = form.data_scadenza;
     // Se la scadenza cambia e c'è una data avviso nel campo, va sempre inviata (altrimenti il server la azzera)
     for (const campo of CAMPI_AVVISO) {
@@ -293,6 +296,16 @@ export default function EmissioniClientePage() {
               <div>
                 <label style={s.label}>Telefono</label>
                 <input style={s.input} name="telefono" value={form.telefono} onChange={handleChange} />
+              </div>
+              <div>
+                <label style={s.label}>Tipo di autorizzazione</label>
+                <input
+                  style={s.input}
+                  name="tipo_autorizzazione"
+                  value={form.tipo_autorizzazione}
+                  maxLength={500}
+                  onChange={handleChange}
+                />
               </div>
               <div>
                 <label style={s.label}>Scadenza emissioni *</label>

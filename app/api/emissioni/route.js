@@ -31,6 +31,7 @@ export async function POST(request) {
   const ragione_sociale = (body.ragione_sociale || "").replace(/\s+/g, " ").trim();
   const email = (body.email || "").trim();
   const telefono = (body.telefono || "").trim();
+  const tipo_autorizzazione = String(body.tipo_autorizzazione || "").trim();
   const data_scadenza = body.data_scadenza;
   // Facoltative: se vuote valgono i predefiniti (scadenza meno 90, 60 e 30 giorni)
   const avvisiIn = CAMPI_AVVISO.map((campo) => (body[campo] ? String(body[campo]) : null));
@@ -60,6 +61,9 @@ export async function POST(request) {
   if (telefono.length > 30) {
     return Response.json({ error: "Telefono troppo lungo (max 30 caratteri)" }, { status: 400 });
   }
+  if (tipo_autorizzazione.length > 500) {
+    return Response.json({ error: "Tipo di autorizzazione troppo lungo (max 500 caratteri)" }, { status: 400 });
+  }
 
   const { data, error } = await getSupabase()
     .from("emissioni_clienti")
@@ -67,6 +71,7 @@ export async function POST(request) {
       ragione_sociale,
       email: email || null,
       telefono: telefono || null,
+      tipo_autorizzazione: tipo_autorizzazione || null,
       data_scadenza,
       ...Object.fromEntries(CAMPI_AVVISO.map((campo, i) => [campo, avvisi[i]])),
     })

@@ -36,7 +36,7 @@ export async function GET(request, { params }) {
   return Response.json(data);
 }
 
-// Modifica anagrafica (nome, email, telefono), scadenza e date dei tre avvisi.
+// Modifica anagrafica (nome, email, telefono, tipo di autorizzazione), scadenza e date dei tre avvisi.
 // Si inviano solo i campi da cambiare. Per gli avvisi: data_avviso_1, data_avviso_2, data_avviso_3
 // (valore vuoto/null = torna al predefinito: scadenza meno 90 / 60 / 30 giorni).
 export async function PATCH(request, { params }) {
@@ -117,6 +117,14 @@ export async function PATCH(request, { params }) {
       return Response.json({ error: "Telefono troppo lungo (max 30 caratteri)" }, { status: 400 });
     }
     update.telefono = tel || null;
+  }
+
+  if ("tipo_autorizzazione" in body) {
+    const tipo = String(body.tipo_autorizzazione || "").trim();
+    if (tipo.length > 500) {
+      return Response.json({ error: "Tipo di autorizzazione troppo lungo (max 500 caratteri)" }, { status: 400 });
+    }
+    update.tipo_autorizzazione = tipo || null;
   }
 
   if (Object.keys(update).length === 1) {
