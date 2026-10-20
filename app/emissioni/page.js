@@ -23,6 +23,7 @@ const emptyForm = {
   data_avviso_3: "",
   email: "",
   telefono: "",
+  tipo_autorizzazione: "",
 };
 
 const fmtIso = (iso) => (iso ? iso.split("-").reverse().join("/") : "—");
@@ -464,7 +465,8 @@ export default function EmissioniPage() {
     ? righe.filter(
         (r) =>
           r.ragione_sociale.toLowerCase().includes(q) ||
-          (r.email || "").toLowerCase().includes(q)
+          (r.email || "").toLowerCase().includes(q) ||
+          (r.tipo_autorizzazione || "").toLowerCase().includes(q)
       )
     : righe;
 
@@ -517,7 +519,7 @@ export default function EmissioniPage() {
             Colonne del template: <strong>ANAGRAFICA CLIENTE</strong>, <strong>SCADENZA EMISSIONI</strong> (GG/MM/AAAA),
             <strong> PRIMO AVVISO</strong>, <strong>SECONDO AVVISO</strong>, <strong>TERZO AVVISO</strong> (facoltative:
             se vuote gli avvisi partono {GIORNI_PREAVVISO.join(", ")} giorni prima della scadenza),
-            più <strong>EMAIL</strong> e TELEFONO. L&apos;email serve per l&apos;avviso automatico: senza email il cliente
+            più <strong>EMAIL</strong>, TELEFONO e <strong>TIPO DI AUTORIZZAZIONE</strong>. L&apos;email serve per l&apos;avviso automatico: senza email il cliente
             viene caricato ma non riceve avvisi. Se il cliente esiste già (stesso nome) viene aggiornato; i clienti
             non presenti nel file non vengono toccati.
           </p>
@@ -619,6 +621,16 @@ export default function EmissioniPage() {
                 <label style={s.label}>Telefono</label>
                 <input style={s.input} name="telefono" value={form.telefono} onChange={handleChange} />
               </div>
+              <div>
+                <label style={s.label}>Tipo di autorizzazione</label>
+                <input
+                  style={s.input}
+                  name="tipo_autorizzazione"
+                  value={form.tipo_autorizzazione}
+                  maxLength={500}
+                  onChange={handleChange}
+                />
+              </div>
             </div>
             <button type="submit" disabled={saving} style={{ ...s.button, opacity: saving ? 0.6 : 1 }}>
               {saving ? "Salvataggio..." : "Aggiungi cliente"}
@@ -632,7 +644,7 @@ export default function EmissioniPage() {
           <input
             style={s.search}
             type="search"
-            placeholder="Cerca per nome o email..."
+            placeholder="Cerca per nome, email o autorizzazione..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -670,6 +682,11 @@ export default function EmissioniPage() {
                         <Link href={`/emissioni/${r.id}`} style={s.nameLink} title="Apri e modifica l'anagrafica">
                           {r.ragione_sociale}
                         </Link>
+                        {r.tipo_autorizzazione && (
+                          <div style={s.small} title="Tipo di autorizzazione">
+                            {r.tipo_autorizzazione}
+                          </div>
+                        )}
                       </td>
                       <td style={s.td}>
                         {r.email ? r.email : <span style={s.smallRed}>email mancante</span>}

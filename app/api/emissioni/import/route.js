@@ -48,7 +48,7 @@ export async function POST(request) {
     esistenti = await leggiTutti((da, a) =>
       supabase
         .from("emissioni_clienti")
-        .select("id, ragione_sociale, email, telefono, data_scadenza, data_avviso_1, data_avviso_2, data_avviso_3")
+        .select("id, ragione_sociale, email, telefono, tipo_autorizzazione, data_scadenza, data_avviso_1, data_avviso_2, data_avviso_3")
         .order("id", { ascending: true })
         .range(da, a)
     );
@@ -92,9 +92,10 @@ export async function POST(request) {
     CAMPI_AVVISO.forEach((campo, i) => {
       if (finali[i] !== esistenti[i]) upd[campo] = finali[i];
     });
-    // Email e telefono: il file li sovrascrive solo se compilati
+    // Email, telefono e tipo di autorizzazione: il file li sovrascrive solo se compilati
     if (r.email && r.email !== ex.email) upd.email = r.email;
     if (r.telefono && r.telefono !== ex.telefono) upd.telefono = r.telefono;
+    if (r.tipo_autorizzazione && r.tipo_autorizzazione !== ex.tipo_autorizzazione) upd.tipo_autorizzazione = r.tipo_autorizzazione;
     if (!r.email && !ex.email) senzaEmail++;
 
     if (Object.keys(upd).length > 0) daAggiornare.push({ ex, r, upd });
@@ -111,6 +112,7 @@ export async function POST(request) {
       ragione_sociale: r.ragione_sociale,
       email: r.email,
       telefono: r.telefono,
+      tipo_autorizzazione: r.tipo_autorizzazione,
       data_scadenza: r.data_scadenza,
       ...Object.fromEntries(CAMPI_AVVISO.map((campo, i) => [campo, r.avvisi[i]])),
     });
